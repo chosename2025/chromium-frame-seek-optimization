@@ -74,6 +74,8 @@ media::PipelineController
 
 **Подробности:** См. [chromiuminfo/archtecture.md](./chromiuminfo/archtecture.md) для полного описания архитектуры медиа-компонентов, включая инициализацию и запуск воспроизведения, процесс Playback и операцию Seek, а также ссылки на код Chromium.
 
+**Архитектурное ограничение и сравнение с Safari:** См. [chromiuminfo/seek-limitation-and-safari.md](./chromiuminfo/seek-limitation-and-safari.md) — почему нельзя «просто проверить следующий кадр», где происходит сброс при seek, почему оптимизация должна быть в PipelineController/RendererWrapper, а не в Demuxer, и как это решено в WebKit (Safari).
+
 ## Работа с репозиторием Chromium
 
 Для внесения изменений в Chromium необходимо настроить окружение разработки:

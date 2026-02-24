@@ -181,6 +181,8 @@ media::PipelineController
 
 Эти фрагменты показывают, как именно демультиплексор и медиа-пайплайн обрабатывают инициализацию, воспроизведение и seek.
 
+**Архитектурное ограничение:** Почему нельзя «просто проверить следующий кадр», где происходит фатальный сброс при seek и почему оптимизация fast-forward должна быть в PipelineController/RendererWrapper, а не в Demuxer — см. [seek-limitation-and-safari.md](./seek-limitation-and-safari.md). Там же сравнение с Safari (WebKit/AVFoundation).
+
 ---
 
 ## Отладка и логирование
