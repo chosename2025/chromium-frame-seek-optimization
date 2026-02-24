@@ -72,7 +72,7 @@ media::PipelineController
 - `media::VideoRenderer` — управляет рендерингом кадров
 - `media::VideoFrameCompositor` — координирует отображение кадров
 
-**Подробности:** См. [chromiuminfo/archtecture.md](./chromiuminfo/archtecture.md) для полного описания архитектуры медиа-компонентов.
+**Подробности:** См. [chromiuminfo/archtecture.md](./chromiuminfo/archtecture.md) для полного описания архитектуры медиа-компонентов, включая инициализацию и запуск воспроизведения, процесс Playback и операцию Seek, а также ссылки на код Chromium.
 
 ## Работа с репозиторием Chromium
 

@@ -51,9 +51,11 @@ media::PipelineController
 
 #### 1. **HTMLMediaElement → WebMediaPlayerImpl**
 
+- При воспроизведении видео тег `<video>` (HTMLMediaElement) взаимодействует с `media::WebMediaPlayerImpl` (Blink) — именно он отвечает за загрузку и воспроизведение медиа.
 - `<video>` (и `<audio>`) начинается в `blink::HTMLMediaElement` в `third_party/blink/`
 - Через `content::MediaFactory` достигает `media::WebMediaPlayerImpl` в `third_party/blink/public/platform/media/`
-- Каждый `blink::HTMLMediaElement` владеет `media::WebMediaPlayerImpl` для обработки операций: play, pause, **seek**, изменение громкости и т.д.
+- Каждый `HTMLMediaElement` владеет своим `WebMediaPlayerImpl`, который координирует объекты `PipelineController`, `DataSource`, `Demuxer` и `Renderer`.
+- Операции: play, pause, **seek**, изменение громкости и т.д.
 
 #### 2. **WebMediaPlayerImpl**
 
@@ -65,8 +67,10 @@ media::PipelineController
 
 Во время нормального воспроизведения `media::Demuxer`, принадлежащий `WebMediaPlayerImpl`, может быть:
 
-- **`media::FFmpegDemuxer`** — используется для стандартного воспроизведения через `src=`, где `WebMediaPlayerImpl` отвечает за загрузку байтов по сети
+- **`media::FFmpegDemuxer`** — для обычного воспроизведения по `src=` в качестве демультиплексора используется именно он; `WebMediaPlayerImpl` отвечает за загрузку байтов по сети
 - **`media::ChunkDemuxer`** — используется с Media Source Extensions (MSE), где JavaScript-код предоставляет мультиплексированные байты
+
+Визуально медиа-пайплайн состоит из последовательности фильтров: сначала **Demuxer** (FFmpegDemuxer), затем декодеры и, наконец, рендереры аудио и видео. Схема: *Media pipeline Chromium (демультиплексирование → декодирование → рендеринг)*.
 
 > **Важно для seeking:** Demuxer отвечает за парсинг видео-файла и извлечение кадров. Производительность seeking напрямую зависит от того, как demuxer находит и извлекает нужные кадры.
 
@@ -96,6 +100,88 @@ media::PipelineController
 - `media::VideoRendererSink` принимает callback, который вызывается периодически, когда требуются новые видео-кадры
 - На стороне видео `media::VideoRendererSink` управляется асинхронными callback'ами, выдаваемыми композитором в `media::VideoFrameCompositor`
 - `media::VideoRenderer` взаимодействует с `media::AudioRenderer` через `media::TimeSource` для координации синхронизации аудио и видео
+
+---
+
+## Инициализация и запуск воспроизведения
+
+Когда вы устанавливаете `video.src` и вызываете `play()`, `WebMediaPlayerImpl` начинает загрузку через **DataSource** (например, `BufferedDataSource` или `MultibufferDataSource` для сети).
+
+1. После инициализации источника данных запускается **`FFmpegDemuxer::Initialize`**, который создаёт внутри себя **FFmpegGlue** и **BlockingUrlProtocol** для низкоуровневого чтения потока.
+2. На фоновом потоке выполняется **`avformat_open_input`** (через `FFmpegGlue::OpenContext`), а после его завершения вызывается **`OnOpenContextDone`**.
+3. В **`OnOpenContextDone`** выполняется **`avformat_find_stream_info`** (поиск информации о потоках), а по завершении — **`OnFindStreamInfoDone`**.
+4. В **`OnFindStreamInfoDone`** `FFmpegDemuxer` анализирует найденные потоки контейнера:
+   - отбрасывает неподдерживаемые;
+   - создаёт объекты **`FFmpegDemuxerStream`** для аудио/видео;
+   - определяет кодеки и конфигурации декодеров;
+   - устанавливается начальное время **`start_time_`** (минимальный из потоков) и продолжительность **`duration_`** (максимальное из потоков или из контейнера).
+5. Затем `FFmpegDemuxer` сообщает PipelineHost о готовности: устанавливает длительность и вызывает callback об успешной инициализации.
+
+Таким образом, до начала реального рендеринга происходит полный анализ контейнера и подготовка демультиплексора (чтение заголовков, настроек кодеков и т.д.).
+
+---
+
+## Процесс воспроизведения (Playback)
+
+После успешной инициализации `WebMediaPlayerImpl` запускает медиа-пайплайн: вызывается **`PipelineImpl::Start()`**, который в медиа-потоке создаёт **RendererWrapper** (обёртку над аудио- и видеорендерерами) и передаёт ему демультиплексор.
+
+Далее начинается цикл чтения и декодирования:
+
+- **FFmpegDemuxer** в фоновом потоке непрерывно читает пакет за пакетом из `BlockingUrlProtocol` (фактически через **`av_read_frame`**) до конца файла или до исчерпания ресурсов.
+- Демультиплексор реализует метод **`ReadFrameIfNeeded`**, который асинхронно вызывает **`ReadFrameAndDiscardEmpty`** и по окончании передачи пакетов вызывает **`OnReadFrameDone`**.
+- В **`OnReadFrameDone`** полученный `AVPacket` направляется в соответствующий поток (по индексу `packet->stream_index`). Если у пакета есть данные и он попадает в существующий `FFmpegDemuxerStream`, вызывается **`FFmpegDemuxerStream::EnqueuePacket`**, который ставит пакет в очередь декодера.
+- **`ReadFrameIfNeeded`** продолжает чтение следующих пакетов, пока ёмкости очередей декодеров позволяют (проверяется **`HasAvailableCapacity()`** для каждого потока). Аудио- и видеоданные последовательно заполняют буферы декодеров.
+- Асинхронно запускается декодирование: каждый **AudioDecoder** / **VideoDecoder** читает данные из своего **DemuxerStream** и выдаёт аудио/видео фреймы.
+- В аудио-канале фреймы отправляются в **AudioRendererSink** (напрямую в ОС), в видео — в **VideoRendererSink** (например, **VideoFrameCompositor** для вывода через GPU). Оба рендерера синхронизируются по общему тайм-коду (**TimeSource**, общая аудио-синхронизация).
+
+---
+
+## Операция перемотки (Seek)
+
+При установке `video.currentTime = t` или вызове `seek()` **`WebMediaPlayerImpl`** выполняет метод **`DoSeek`**, который фиксирует новое время и уведомляет **PipelineController** о необходимости поиска. В итоге вызывается **`PipelineImpl::Seek(time)`**.
+
+### Последовательность при Seek
+
+1. **`PipelineImpl::Seek(time)`** ставит **RendererWrapper** в состояние «seeking» и в медиа-потоке выполняет **`RendererWrapper::Seek(time)`**.
+2. **Прекращение текущего чтения:** вызывается **`demuxer_->AbortPendingReads()`** и посылается **`Renderer::Flush()`**, чтобы сбросить все устаревшие кадры в рендерере.
+3. **Поиск:** вызывается **`FFmpegDemuxer::Seek(time)`**. Метод асинхронно корректирует время (с учётом возможного начального смещения `start_time_` и преролла Opus) и вызывает **`av_seek_frame`** на низкоуровневом потоке (через FFmpegGlue). FFmpeg ищет ближайший ключевой кадр, обычно назад относительно нужного времени (флаг **`AVSEEK_FLAG_BACKWARD`**), а если не сработало — без флага, чтобы найти любой ключевой кадр.
+4. Когда **`av_seek_frame`** завершает работу, демультиплексор переходит в **`OnSeekFrameDone`**. При успехе всем **FFmpegDemuxerStream** выполняется **`FlushBuffers(false)`**, чтобы очистить очереди и позволить обработать новые данные.
+5. Демультиплексор продолжает чтение с новой позиции: снова вызывается **`ReadFrameIfNeeded()`**, начинается декодирование с найденного ключевого кадра.
+6. По окончании поиска вызывается callback успеха **PipelineStatusCallback (PIPELINE_OK)**, и `WebMediaPlayerImpl` получает событие завершения seek.
+
+### Отличие Playback и Seek
+
+- **При перемотке:** прерывание потока данных, сброс буферов, произвольный переход к новому времени через **`av_seek_frame`**. Seek более ресурсоёмок: **AbortPendingReads**, **Flush** декодеров, позиционирование демультиплексора, затем заполнение буферов с новой точки.
+- **В обычном режиме:** демультиплексор просто читает кадры последовательно без перезапуска.
+
+После Seek **FFmpegDemuxer** гарантирует, что поток начнётся с ближайшего ключевого кадра и все последующие пакеты будут переданы декодерам.
+
+**Управление состоянием пайплайна:**
+
+- В режиме **Playback** `PipelineImpl` находится в состоянии **kPlaying**, демультиплексор постоянно читается по мере надобности.
+- При **Seek** `PipelineImpl` переходит в состояние **kSeeking**, блокируя дальнейшее чтение до завершения поиска, очищает буферы и затем возвращается в **kPlaying** после reposition.
+
+Воспроизведение и seek используют одни и те же компоненты (WebMediaPlayerImpl, Pipeline, FFmpegDemuxer, декодеры, рендереры), но отличаются потоком управления: при **play** данные читаются непрерывно, при **seek** — пауза, reposition FFmpegDemuxer и повторный запуск чтения из новой позиции.
+
+---
+
+## Ссылки на код Chromium
+
+Детали описанного поведения можно увидеть в исходниках Chromium:
+
+| Компонент | Файл / описание |
+|-----------|------------------|
+| Инициализация демультиплексора | **FFmpegDemuxer::Initialize** — [media/filters/ffmpeg_demuxer.cc](https://chromium.googlesource.com/chromium/src/media/+/master/filters/ffmpeg_demuxer.cc) |
+| Заголовок FFmpegDemuxer | [media/filters/ffmpeg_demuxer.h](https://chromium.googlesource.com/chromium/src/+/HEAD/media/filters/ffmpeg_demuxer.h) |
+| Чтение пакетов | **FFmpegDemuxer::OnReadFrameDone** — [filters/ffmpeg_demuxer.cc](https://chromium.googlesource.com/chromium/src/media/+/master/filters/ffmpeg_demuxer.cc) |
+| Поиск (seek) | **FFmpegDemuxer::Seek** и **OnSeekFrameDone** — [filters/ffmpeg_demuxer.cc](https://chromium.googlesource.com/chromium/src/media/+/master/filters/ffmpeg_demuxer.cc) |
+| WebMediaPlayerImpl | [media/blink/webmediaplayer_impl.cc](https://chromium.googlesource.com/chromium/src/+/9bfe4e2f473b01d5039dd31c9b04cc8c78ff5c70/media/blink/webmediaplayer_impl.cc) |
+| Pipeline (запуск, seek) | [media/base/pipeline_impl.cc](https://chromium.googlesource.com/chromium/src/+/refs/tags/144.0.7553.0/media/base/pipeline_impl.cc) |
+| Обзор media/ | [media/README.md](https://chromium.googlesource.com/chromium/src/+/HEAD/media/README.md) |
+
+Эти фрагменты показывают, как именно демультиплексор и медиа-пайплайн обрабатывают инициализацию, воспроизведение и seek.
+
+---
 
 ## Отладка и логирование
 
@@ -131,3 +217,13 @@ media::PipelineController
 5. **`media::VideoFrameCompositor`** — координирует отображение кадров
 
 Производительность seeking зависит от эффективности поиска I-фреймов и декодирования промежуточных кадров до целевого момента времени.
+
+---
+
+## Источники
+
+- [Chromium Media README](https://chromium.googlesource.com/chromium/src/+/HEAD/media/README.md) — обзор директории `media/`
+- [webmediaplayer_impl.cc](https://chromium.googlesource.com/chromium/src/+/9bfe4e2f473b01d5039dd31c9b04cc8c78ff5c70/media/blink/webmediaplayer_impl.cc) — WebMediaPlayerImpl (Blink)
+- [ffmpeg_demuxer.cc](https://chromium.googlesource.com/chromium/src/media/+/master/filters/ffmpeg_demuxer.cc) — FFmpegDemuxer (инициализация, чтение пакетов, seek)
+- [ffmpeg_demuxer.h](https://chromium.googlesource.com/chromium/src/+/HEAD/media/filters/ffmpeg_demuxer.h) — заголовок FFmpegDemuxer
+- [pipeline_impl.cc](https://chromium.googlesource.com/chromium/src/+/refs/tags/144.0.7553.0/media/base/pipeline_impl.cc) — PipelineImpl (Start, Seek, RendererWrapper)
