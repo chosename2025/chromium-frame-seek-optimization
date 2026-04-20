@@ -1,0 +1,6 @@
+Браузер,seekTimeMs (сред),seekTimeMs (медиана),seekTimeMs (макс),seekFPS (сред),linearSlope,R²,degradationFactor
+Safari (macOS M1),1.69,2.0,11.0,596.4,0.0001,0.0013,2.5
+Chrome 144 (Linux),27.11,8.5,326.1,103.2,-0.0026,0.0014,4.44
+Yandex (Linux),213.14,75.8,874.3,10.4,0.0877,0.0411,2.52
+Firefox 149 (Linux),199.11,48.0,2057.0,21.7,0.3936,0.3695,5.03
+Patched Chrome 146,1.01,0.2,9.6,993.8,-0.0001,0.0022,14.67

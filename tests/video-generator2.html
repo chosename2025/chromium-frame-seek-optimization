@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Попиксельный генератор видео</title>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <style>
+        :root {
+            --bg: #0e0f13;
+            --surface: #16171d;
+            --card: #1c1e26;
+            --border: #2a2d38;
+            --fg: #e8e9ed;
+            --muted: #6b7084;
+            --accent: #00d48a;
+            --accent-dim: #00a86d;
+            --accent-glow: rgba(0, 212, 138, 0.15);
+            --danger: #ff4d6a;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Space Grotesk', sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+            min-height: 100vh;
+        }
+        body::before {
+            content: '';
+            position: fixed;
+            top: -40%; left: -20%;
+            width: 60vw; height: 60vw;
+            background: radial-gradient(circle, rgba(0,212,138,0.06) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        .app {
+            position: relative; z-index: 1;
+            max-width: 760px; margin: 0 auto;
+            padding: 30px 20px 60px;
+        }
+        .header { text-align: center; margin-bottom: 36px; }
+        .header-icon {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 56px; height: 56px; border-radius: 14px;
+            background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+            margin-bottom: 16px; font-size: 24px; color: #0e0f13;
+            box-shadow: 0 8px 30px rgba(0,212,138,0.25);
+        }
+        .header h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 6px; }
+        .header p { color: var(--muted); font-size: 14px; line-height: 1.5; }
+
+        .card {
+            background: var(--card); border: 1px solid var(--border);
+            border-radius: 14px; padding: 24px; margin-bottom: 20px;
+        }
+        .card-title {
+            font-size: 15px; font-weight: 600; margin-bottom: 18px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .card-title i { color: var(--accent); font-size: 14px; }
+
+        .presets-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+            gap: 10px;
+        }
+        .preset-btn {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 10px; padding: 14px 10px; cursor: pointer;
+            text-align: center; transition: all 0.2s;
+            color: var(--fg); font-family: 'Space Grotesk', sans-serif;
+        }
+        .preset-btn:hover { border-color: var(--accent); background: var(--accent-glow); transform: translateY(-1px); }
+        .preset-btn.active { border-color: var(--accent); background: var(--accent-glow); box-shadow: 0 0 20px rgba(0,212,138,0.1); }
+        .preset-btn .preset-name { font-weight: 600; font-size: 13px; margin-bottom: 3px; }
+        .preset-btn .preset-detail { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+        .preset-btn .preset-pixels { font-size: 10px; color: var(--accent); font-family: 'JetBrains Mono', monospace; margin-top: 2px; }
+
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .form-group { display: flex; flex-direction: column; gap: 6px; }
+        .form-group.full { grid-column: 1 / -1; }
+        .form-group label {
+            font-size: 12px; font-weight: 600; color: var(--muted);
+            text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .form-group input[type="number"],
+        .form-group select {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 8px; padding: 10px 12px; color: var(--fg);
+            font-family: 'JetBrains Mono', monospace; font-size: 14px;
+            outline: none; transition: border-color 0.2s; width: 100%;
+        }
+        .form-group input:focus, .form-group select:focus { border-color: var(--accent); }
+        .form-group select {
+            cursor: pointer; -webkit-appearance: none; appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%236b7084' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px;
+        }
+        .resolution-row { display: flex; align-items: center; gap: 8px; }
+        .resolution-row input { flex: 1; }
+        .resolution-row .res-x { color: var(--muted); font-weight: 600; font-size: 14px; flex-shrink: 0; }
+
+        .bitrate-row { display: flex; align-items: center; gap: 12px; }
+        .bitrate-row input[type="range"] {
+            flex: 1; -webkit-appearance: none; appearance: none;
+            height: 6px; background: var(--border); border-radius: 3px; outline: none;
+        }
+        .bitrate-row input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%;
+            background: var(--accent); cursor: pointer; box-shadow: 0 2px 8px rgba(0,212,138,0.3);
+        }
+        .bitrate-value {
+            font-family: 'JetBrains Mono', monospace; font-size: 13px;
+            color: var(--accent); min-width: 70px; text-align: right;
+        }
+
+        .info-box {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 10px; padding: 14px 16px; margin-bottom: 16px;
+            display: flex; align-items: flex-start; gap: 10px;
+        }
+        .info-box i { color: var(--accent); margin-top: 2px; }
+        .info-box p { font-size: 13px; color: var(--muted); line-height: 1.5; }
+        .info-box .val { color: var(--fg); font-family: 'JetBrains Mono', monospace; font-weight: 700; }
+
+        .codec-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+        .codec-badge {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 4px 10px; border-radius: 6px; font-size: 11px;
+            font-family: 'JetBrains Mono', monospace; font-weight: 700;
+        }
+        .codec-badge.ok { background: rgba(0,212,138,0.12); color: var(--accent); }
+        .codec-badge.no { background: rgba(255,77,106,0.1); color: var(--danger); }
+
+        .generate-btn {
+            width: 100%; padding: 16px; border: none; border-radius: 12px;
+            font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 700;
+            cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px;
+            transition: all 0.25s;
+            background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+            color: #0e0f13; box-shadow: 0 4px 20px rgba(0,212,138,0.25); margin-top: 8px;
+        }
+        .generate-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,212,138,0.35); }
+        .generate-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+        .progress-section { margin-top: 16px; display: none; }
+        .progress-section.visible { display: block; }
+        .progress-bar-bg { width: 100%; height: 8px; background: var(--surface); border-radius: 4px; overflow: hidden; }
+        .progress-bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent), #00f5a0); border-radius: 4px; width: 0%; transition: width 0.1s; }
+        .progress-info { display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+
+        .result-section { display: none; }
+        .result-section.visible { display: block; }
+        .video-wrap { position: relative; background: #000; border-radius: 10px; overflow: hidden; }
+        .video-wrap video { width: 100%; display: block; image-rendering: pixelated; }
+        .result-meta { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; margin-top: 16px; }
+        .meta-item { background: var(--surface); border-radius: 8px; padding: 10px 12px; }
+        .meta-item .meta-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+        .meta-item .meta-value { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700; color: var(--fg); }
+        .download-btn {
+            display: flex; align-items: center; justify-content: center; gap: 8px;
+            width: 100%; padding: 14px; margin-top: 16px;
+            border: 1px solid var(--accent); border-radius: 10px;
+            background: var(--accent-glow); color: var(--accent);
+            font-family: 'Space Grotesk', sans-serif; font-size: 15px; font-weight: 600;
+            cursor: pointer; text-decoration: none; transition: all 0.2s;
+        }
+        .download-btn:hover { background: rgba(0,212,138,0.25); transform: translateY(-1px); }
+
+        .toast {
+            position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+            padding: 14px 24px; border-radius: 10px; font-family: 'Space Grotesk', sans-serif;
+            font-size: 14px; font-weight: 600; z-index: 9999;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+            transition: opacity 0.3s;
+        }
+
+        @media (max-width: 600px) {
+            .form-grid { grid-template-columns: 1fr; }
+            .presets-grid { grid-template-columns: repeat(2, 1fr); }
+            .header h1 { font-size: 22px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="app">
+    <header class="header">
+        <div class="header-icon"><i class="fa-solid fa-border-all"></i></div>
+        <h1>Попиксельный генератор</h1>
+        <p>На каждом кадре — ровно один белый пиксель. Остальное — чёрное. По порядку: слева направо, сверху вниз.</p>
+    </header>
+
+    <!-- Пресеты -->
+    <div class="card">
+        <div class="card-title"><i class="fa-solid fa-swatchbook"></i> Пресеты</div>
+        <div class="presets-grid" id="presetsGrid"></div>
+    </div>
+
+    <!-- Параметры -->
+    <div class="card">
+        <div class="card-title"><i class="fa-solid fa-sliders"></i> Параметры</div>
+
+        <div class="info-box" id="infoBox">
+            <i class="fa-solid fa-circle-info"></i>
+            <p id="infoText"></p>
+        </div>
+
+        <div class="form-grid">
+            <div class="form-group">
+                <label>Кодек</label>
+                <select id="codec">
+                    <option value="vp8">VP8 (WebM)</option>
+                    <option value="vp9">VP9 (WebM)</option>
+                    <option value="av1">AV1 (WebM)</option>
+                    <option value="h264">H.264 (MP4)</option>
+                    <option value="h265">H.265/HEVC (MP4)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>FPS</label>
+                <input type="number" id="fps" value="30" min="1" max="120">
+            </div>
+            <div class="form-group full">
+                <label>Разрешение</label>
+                <div class="resolution-row">
+                    <input type="number" id="width" value="16" min="2">
+                    <span class="res-x">&times;</span>
+                    <input type="number" id="height" value="16" min="2">
+                </div>
+            </div>
+            <div class="form-group full">
+                <label>Битрейт</label>
+                <div class="bitrate-row">
+                    <input type="range" id="bitrateSlider" min="50" max="50000" value="1000" step="50">
+                    <span class="bitrate-value" id="bitrateDisplay">1 000 kbps</span>
+                </div>
+            </div>
+        </div>
+        <div class="codec-badges" id="codecBadges"></div>
+
+        <button class="generate-btn" id="generateBtn">
+            <i class="fa-solid fa-wand-magic-sparkles"></i>
+            Сгенерировать видео
+        </button>
+
+        <div class="progress-section" id="progressSection">
+            <div class="progress-bar-bg">
+                <div class="progress-bar-fill" id="progressFill"></div>
+            </div>
+            <div class="progress-info">
+                <span id="progressText">0%</span>
+                <span id="progressDetail">Кадр 0 / 0</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Результат -->
+    <div class="card result-section" id="resultSection">
+        <div class="card-title"><i class="fa-solid fa-circle-play"></i> Результат</div>
+        <div class="video-wrap">
+            <video id="outputVideo" controls></video>
+        </div>
+        <div class="result-meta" id="resultMeta"></div>
+        <a id="downloadLink" class="download-btn" download>
+            <i class="fa-solid fa-download"></i> Скачать видео
+        </a>
+    </div>
+</div>
+
+<script>
+    // Пресеты — маленькие разрешения для попиксельного теста
+    const presets = [
+        { name: '4×4',     detail: '16 пикселей',   w: 4,   h: 4,   fps: 2,   bitrate: 100  },
+        { name: '8×8',     detail: '64 пикселя',     w: 8,   h: 8,   fps: 4,   bitrate: 200  },
+        { name: '16×16',   detail: '256 пикселей',   w: 16,  h: 16,  fps: 10,  bitrate: 500  },
+        { name: '32×32',   detail: '1 024 пикселя',  w: 32,  h: 32,  fps: 15,  bitrate: 1000 },
+        { name: '64×64',   detail: '4 096 пикселей', w: 64,  h: 64,  fps: 24,  bitrate: 2000 },
+        { name: '128×128', detail: '16 384 пикс.',   w: 128, h: 128, fps: 30,  bitrate: 5000 },
+    ];
+
+    // Кодеки
+    const codecMap = {
+        vp8:  { mime: 'video/webm;codecs=vp8',            ext: 'webm', label: 'VP8'   },
+        vp9:  { mime: 'video/webm;codecs=vp9',            ext: 'webm', label: 'VP9'   },
+        av1:  { mime: 'video/webm;codecs=av01.0.01M.08',  ext: 'webm', label: 'AV1'   },
+        h264: { mime: 'video/mp4;codecs=avc1.42E01E',     ext: 'mp4',  label: 'H.264' },
+        h265: { mime: 'video/mp4;codecs=hvc1.1.6.L93.B0', ext: 'mp4',  label: 'H.265' },
+    };
+
+    const $ = id => document.getElementById(id);
+    const widthInput    = $('width');
+    const heightInput   = $('height');
+    const fpsInput      = $('fps');
+    const codecSelect   = $('codec');
+    const bitrateSlider = $('bitrateSlider');
+    const bitrateDisplay= $('bitrateDisplay');
+    const generateBtn   = $('generateBtn');
+    const progressSection = $('progressSection');
+    const progressFill  = $('progressFill');
+    const progressText  = $('progressText');
+    const progressDetail= $('progressDetail');
+    const resultSection = $('resultSection');
+    const outputVideo   = $('outputVideo');
+    const downloadLink  = $('downloadLink');
+    const resultMeta    = $('resultMeta');
+    const codecBadges   = $('codecBadges');
+    const presetsGrid   = $('presetsGrid');
+    const infoText      = $('infoText');
+
+    let isRunning = false;
+
+    // Рендер пресетов
+    presets.forEach((p, i) => {
+        const btn = document.createElement('button');
+        btn.className = 'preset-btn';
+        btn.innerHTML = `<div class="preset-name">${p.name}</div><div class="preset-detail">${p.detail}</div><div class="preset-pixels">${p.fps} fps</div>`;
+        btn.addEventListener('click', () => applyPreset(i));
+        presetsGrid.appendChild(btn);
+    });
+
+    function applyPreset(index) {
+        const p = presets[index];
+        widthInput.value = p.w;
+        heightInput.value = p.h;
+        fpsInput.value = p.fps;
+        bitrateSlider.value = p.bitrate;
+        updateBitrateDisplay();
+        updateInfoBox();
+        document.querySelectorAll('.preset-btn').forEach((btn, i) => btn.classList.toggle('active', i === index));
+    }
+
+    [widthInput, heightInput, fpsInput, bitrateSlider].forEach(el => {
+        el.addEventListener('input', () => {
+            document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+            updateInfoBox();
+        });
+    });
+
+    function updateInfoBox() {
+        const w = Math.max(2, parseInt(widthInput.value) || 4);
+        const h = Math.max(2, parseInt(heightInput.value) || 4);
+        const fps = Math.max(1, parseInt(fpsInput.value) || 10);
+        const total = w * h;
+        const sec = (total / fps).toFixed(1);
+        const min = (total / fps / 60).toFixed(2);
+        infoText.innerHTML = `Всего пикселей: <span class="val">${total.toLocaleString('ru')}</span> &middot; При ${fps} fps — <span class="val">${sec} сек</span> (${min} мин)`;
+    }
+    updateInfoBox();
+
+    // Битрейт
+    function updateBitrateDisplay() {
+        const val = parseInt(bitrateSlider.value);
+        bitrateDisplay.textContent = val >= 1000
+            ? `${(val / 1000).toFixed(val % 1000 === 0 ? 0 : 1)} Mbps`
+            : `${val} kbps`;
+    }
+    bitrateSlider.addEventListener('input', updateBitrateDisplay);
+    updateBitrateDisplay();
+
+    // Поддержка кодеков
+    function checkCodecs() {
+        codecBadges.innerHTML = '';
+        Object.entries(codecMap).forEach(([key, info]) => {
+            const ok = MediaRecorder.isTypeSupported(info.mime);
+            const b = document.createElement('span');
+            b.className = `codec-badge ${ok ? 'ok' : 'no'}`;
+            b.innerHTML = `<i class="fa-solid ${ok ? 'fa-check' : 'fa-xmark'}"></i> ${info.label}`;
+            codecBadges.appendChild(b);
+        });
+    }
+    checkCodecs();
+    codecSelect.addEventListener('change', checkCodecs);
+
+    // Отрисовка кадра: всё чёрное, один белый пиксель
+    function drawFrame(imageData, w, h, pixelIndex) {
+        // Заполняем всё чёрным (0,0,0,255)
+        const data = imageData.data;
+        for (let i = 0; i < data.length; i += 4) {
+            data[i]     = 0;
+            data[i + 1] = 0;
+            data[i + 2] = 0;
+            data[i + 3] = 255;
+        }
+        // Ставим один белый пиксель
+        if (pixelIndex < w * h) {
+            const offset = pixelIndex * 4;
+            data[offset]     = 255;
+            data[offset + 1] = 255;
+            data[offset + 2] = 255;
+            // alpha уже 255
+        }
+    }
+
+    // Генерация
+    generateBtn.addEventListener('click', startGeneration);
+
+    async function startGeneration() {
+        if (isRunning) return;
+        isRunning = true;
+        generateBtn.disabled = true;
+
+        const w = Math.max(2, parseInt(widthInput.value) || 4);
+        const h = Math.max(2, parseInt(heightInput.value) || 4);
+        const fps = Math.max(1, Math.min(120, parseInt(fpsInput.value) || 10));
+        const bitrate = parseInt(bitrateSlider.value) * 1000;
+        const codecKey = codecSelect.value;
+        const ci = codecMap[codecKey];
+        const mimeType = ci.mime;
+        const totalPixels = w * h;
+
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+            showToast(`Кодек ${ci.label} не поддерживается в этом браузере`, true);
+            generateBtn.disabled = false;
+            isRunning = false;
+            return;
+        }
+
+        // Предупреждение для больших размеров
+        const estSec = totalPixels / fps;
+        if (estSec > 300) {
+            showToast(`Видео займёт ~${(estSec / 60).toFixed(0)} минут — это очень долго`, true);
+            generateBtn.disabled = false;
+            isRunning = false;
+            return;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d', { willReadFrequently: false });
+        const imageData = ctx.createImageData(w, h);
+
+        const stream = canvas.captureStream(0);
+        const track = stream.getVideoTracks()[0];
+
+        let recorder;
+        try {
+            recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: bitrate });
+        } catch (e) {
+            showToast(`Ошибка: ${e.message}`, true);
+            generateBtn.disabled = false;
+            isRunning = false;
+            return;
+        }
+
+        const chunks = [];
+        recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+
+        progressSection.classList.add('visible');
+        resultSection.classList.remove('visible');
+        updateProgress(0, totalPixels);
+
+        recorder.start(200);
+
+        const frameInterval = 1000 / fps;
+
+        let nextFrameAt = performance.now();
+
+        for (let px = 0; px < totalPixels; px++) {
+            drawFrame(imageData, w, h, px);
+            ctx.putImageData(imageData, 0, 0);
+
+            if (track.requestFrame) track.requestFrame();
+
+            nextFrameAt += frameInterval;
+
+            // UI yield — не влияет на timing, т.к. мы ориентируемся на абсолютное время
+            if (px % Math.max(1, Math.floor(totalPixels / 500)) === 0 || px === totalPixels - 1) {
+                updateProgress(px + 1, totalPixels);
+                await new Promise(r => setTimeout(r, 0));
+            }
+
+            const wait = nextFrameAt - performance.now();
+            if (wait > 1) await new Promise(r => setTimeout(r, wait));
+        }
+
+        progressText.textContent = 'Сборка файла...';
+
+        await new Promise(resolve => { recorder.onstop = resolve; recorder.stop(); });
+
+        const blob = new Blob(chunks, { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const sizeMB = (blob.size / (1024 * 1024)).toFixed(3);
+
+        outputVideo.src = url;
+
+        resultMeta.innerHTML = `
+            <div class="meta-item"><div class="meta-label">Разрешение</div><div class="meta-value">${w}×${h}</div></div>
+            <div class="meta-item"><div class="meta-label">Пикселей</div><div class="meta-value">${totalPixels.toLocaleString('ru')}</div></div>
+            <div class="meta-item"><div class="meta-label">FPS</div><div class="meta-value">${fps}</div></div>
+            <div class="meta-item"><div class="meta-label">Длительность</div><div class="meta-value">${estSec.toFixed(1)} сек</div></div>
+            <div class="meta-item"><div class="meta-label">Кодек</div><div class="meta-value">${ci.label}</div></div>
+            <div class="meta-item"><div class="meta-label">Битрейт</div><div class="meta-value">${(bitrate / 1e6).toFixed(2)} Mbps</div></div>
+            <div class="meta-item"><div class="meta-label">Размер</div><div class="meta-value">${sizeMB} МБ</div></div>
+            <div class="meta-item"><div class="meta-label">Формат</div><div class="meta-value">.${ci.ext}</div></div>
+        `;
+
+        downloadLink.href = url;
+        downloadLink.download = `pixel_${w}x${h}_${fps}fps_${ci.label}.${ci.ext}`;
+
+        resultSection.classList.add('visible');
+        progressFill.style.width = '100%';
+        progressText.textContent = 'Готово';
+
+        generateBtn.disabled = false;
+        isRunning = false;
+    }
+
+    function updateProgress(current, total) {
+        const pct = Math.round((current / total) * 100);
+        progressFill.style.width = pct + '%';
+        progressText.textContent = pct + '%';
+        progressDetail.textContent = `Пиксель ${current.toLocaleString('ru')} / ${total.toLocaleString('ru')}`;
+    }
+
+    function showToast(msg, isDanger) {
+        const t = document.createElement('div');
+        t.className = 'toast';
+        t.style.color = isDanger ? '#fff' : '#0e0f13';
+        t.style.background = isDanger ? 'var(--danger)' : 'var(--accent)';
+        t.style.boxShadow = `0 8px 30px ${isDanger ? 'rgba(255,77,106,0.3)' : 'rgba(0,212,138,0.3)'}`;
+        t.textContent = msg;
+        document.body.appendChild(t);
+        setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 3500);
+    }
+</script>
+</body>
+</html>

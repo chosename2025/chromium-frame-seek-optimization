@@ -2,7 +2,7 @@
 
 Production-grade Vue 3 + TypeScript benchmark suite for measuring frame-by-frame video seek performance across resolutions, fps, and iframe densities.
 
-Inspired by [HTML Video Element Seeking Performance](https://stepancar.github.io/articles/articles/html-video-element-seeking/) by Stepan Karpov.
+Inspired by [HTML Video Element Seeking Performance](https://stepancar.github.io/articles/articles/html-video-element-seeking/).
 
 ## Features
 
