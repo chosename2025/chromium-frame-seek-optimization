@@ -3,7 +3,8 @@
 > **Источник:** [Chromium Issue Tracker #418456081](https://issues.chromium.org/issues/418456081)  
 > **Контекст задачи:** См. [README.md](../README.md)  
 > **Архитектурный контекст:** См. [archtecture.md](./archtecture.md)  
-> **Ограничение seek и сравнение с Safari:** См. [seek-limitation-and-safari.md](./seek-limitation-and-safari.md)
+> **Ограничение seek и сравнение с Safari:** См. [seek-limitation-and-safari.md](./seek-limitation-and-safari.md)  
+> **Детали реализации:** См. [implementation.md](./implementation.md)
 
 ---
 
@@ -111,12 +112,15 @@ media::VideoFrameCompositor::OnNewFrame()
 
 ## Технические детали реализации
 
-### Компоненты, требующие изменений
+### Изменённые компоненты (патч 3)
 
-1. **`media/filters/ffmpeg_demuxer.cc`** — добавление индексации кадров
-2. **`media/blink/webmediaplayer_impl.cc`** — оптимизация координации seeking
-3. **`media/renderers/video_renderer_impl.cc`** — улучшение обработки кадров
-4. **`media/base/video_decoder.h`** — расширение API для селективного декодирования
+1. **`media/base/pipeline_impl.cc`** — точка выбора fast-forward / standard seek в `RendererWrapper::Seek()`
+2. **`media/filters/ffmpeg_demuxer.cc`** — `ShouldFastForward()`: проверка buffered ranges и read-head
+3. **`media/renderers/renderer_impl.cc`** — `FastForwardTo()` через `BarrierClosure` для аудио+видео
+4. **`media/renderers/video_renderer_impl.cc`** — `FastForwardTo()`: управление очередью кадров
+5. **`media/renderers/audio_renderer_impl.cc`** — `FastForwardTo()`: сброс AudioClock и буферов
+6. **`media/filters/decoder_stream.cc`** — `FastForwardTo()`: отбрасывание стале декодированных кадров
+7. **`media/filters/video_renderer_algorithm.cc`** — `DiscardFramesBefore()`, `HasFrameForTime()`
 
 ### Интеграция с существующей архитектурой
 
@@ -136,9 +140,23 @@ media::PipelineController
 
 ---
 
+## Реализованное решение (патч 3)
+
+Вместо теоретических предложений выше реализован **fast-forward путь** непосредственно в `PipelineImpl::RendererWrapper::Seek()`:
+
+- `FFmpegDemuxer` получил метод `ShouldFastForward()` — проверяет, находятся ли данные для целевого времени в буфере или достижимы чтением вперёд (≤2 секунд).
+- `RendererImpl` получил `SupportsFastForward()` и `FastForwardTo()` — при fast-forward не выполняются `Flush`, `av_seek_frame` и сброс декодера.
+- `DecoderStream<T>` получил `FastForwardTo()` — отбрасывает устаревшие кадры из очереди без `Reset()`.
+- `VideoRendererAlgorithm` получил `DiscardFramesBefore()` и `HasFrameForTime()`.
+
+**Подробности:** [implementation.md](./implementation.md)
+
+---
+
 ## Статус и дальнейшие шаги
 
-- **Статус issue:** Требуется проверка в [Chromium Issue Tracker](https://issues.chromium.org/issues/418456081)
+- **Статус реализации:** Патч применён к рабочей ветке `../src`
+- **Исходный issue:** [Chromium Issue Tracker #418456081](https://issues.chromium.org/issues/418456081)
 - **Приоритет:** Высокий (критично для приложений с покадровой обработкой видео)
 - **Связанные компоненты:** См. раздел "Релевантность для оптимизации seeking" в [archtecture.md](./archtecture.md#релевантность-для-оптимизации-seeking)
 

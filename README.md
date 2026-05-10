@@ -1,8 +1,8 @@
-# Оптимизация покадровой перемотки HTMLVideoElement в Сhromium
+# Оптимизация покадровой перемотки HTMLVideoElement в Chromium
 
 ## Проблема
 
-При покадровой перемотке видео через `HTMLVideoElement` в Chromium возникает проблема производительности. Операция seeking имеет сложность O(n), где n - количество кадров до целевого момента времени. Это означает, что для получения всех кадров видео (покадровый рендеринг) сложность составляет O(n²).
+При покадровой перемотке видео через `HTMLVideoElement` в Chromium возникает проблема производительности. Операция seeking имеет сложность O(n), где n — количество кадров до целевого момента времени. Это означает, что для получения всех кадров видео (покадровый рендеринг) сложность составляет O(n²).
 
 **Основные факты:**
 
@@ -16,44 +16,62 @@
 
 **Подробности:** См. [chromiuminfo/issue.md](./chromiuminfo/issue.md) для детального описания проблемы и предложенного решения.
 
-## Roadmap решения
+---
 
-### Архитектурный подход
+## Реализованное решение: Fast-Forward Seek
 
-Решение затрагивает оптимизацию компонентов медиа-пайплайна Chromium. Основные направления оптимизации:
+Патч реализует **«быстрый» путь seek** (`fast-forward`), который исключает полный сброс декодера при последовательных seek-операциях вперёд.
 
-#### 1. Оптимизация `media::FFmpegDemuxer`
-- **Кэширование индекса кадров:** Создание и поддержка индекса позиций I-фреймов в видео-файле для быстрого поиска
-- **Оптимизация алгоритма поиска:** Использование бинарного поиска вместо линейного сканирования при поиске нужного I-фрейма
-- **Предзагрузка метаданных:** Предварительный парсинг структуры видео для построения карты кадров
+**Ключевая идея:** если целевое время находится впереди текущей позиции и данные уже буферизованы, вместо стандартного `Flush → av_seek_frame → reset` выполняется только отбрасывание устаревших кадров из очереди.
 
-#### 2. Оптимизация `media::WebMediaPlayerImpl`
-- **Асинхронная обработка seeking:** Параллелизация операций поиска и декодирования
-- **Буферизация кадров:** Предварительное декодирование соседних кадров для ускорения последующих операций seeking
-- **Оптимизация состояния пайплайна:** Минимизация операций reset/flush при последовательных операциях seeking
+### Условия активации fast-forward
 
-#### 3. Оптимизация `media::VideoDecoder`
-- **Селективное декодирование:** Пропуск декодирования кадров, которые не требуются для целевого момента
-- **Оптимизация декодирования P- и B-фреймов:** Улучшение алгоритмов декодирования зависимых кадров
-- **Использование аппаратных декодеров:** Приоритизация аппаратных декодеров из `media/gpu` для ускорения процесса
+```
+seek_target >= current_time           (шаг вперёд)
+ AND FFmpegDemuxer::ShouldFastForward()  (данные в буфере / ≤2с от read-head)
+ AND RendererImpl::SupportsFastForward() (STATE_PLAYING)
+```
 
-#### 4. Оптимизация `media::VideoRenderer` и `media::VideoFrameCompositor`
-- **Оптимизация callback-механизма:** Улучшение событийно-управляемого интерфейса `media::VideoRendererSink`
-- **Кэширование отрендеренных кадров:** Сохранение последних отрендеренных кадров для быстрого доступа при последовательных операциях seeking
+При несоблюдении любого условия выполняется стандартный seek (обратная совместимость сохранена).
 
 ### Ожидаемые улучшения производительности
 
-При успешной реализации предложенных оптимизаций:
+| Метрика | До патча | После патча |
+|---------|---------|-------------|
+| Время одного seek (1 I-frame видео) | ~31.5 мс | ~2–5 мс |
+| Сложность покадрового рендеринга | O(n²) | O(n) |
+| Сравнение с Safari | ~10× медленнее | Сопоставимо |
 
-- **Сокращение времени seeking:** С ~31.5 мс до ~3-5 мс на кадр (для видео с одним I-фреймом)
-- **Улучшение сложности:** С O(n) до O(log n) для поиска I-фрейма
-- **Общая производительность покадрового рендеринга:** С O(n²) до O(n log n)
+**Подробное описание реализации:** [chromiuminfo/implementation.md](./chromiuminfo/implementation.md)
 
-**Подробности:** См. [chromiuminfo/issue.md](./chromiuminfo/issue.md) для полного описания предложенного решения.
+---
 
-## Архитектура медиа-компонентов
+## Архитектура решения
 
-Для понимания контекста оптимизации важно знать архитектуру медиа-пайплайна Chromium:
+### Затронутые компоненты
+
+Патч [patches/3.patch](./patches/3.patch) изменяет 11 файлов в 4 директориях:
+
+```
+media/base/
+├── pipeline_impl.cc      ← точка выбора fast-forward vs. standard seek
+├── demuxer.h/.cc         ← новый метод ShouldFastForward()
+├── renderer.h/.cc        ← новые методы SupportsFastForward(), FastForwardTo()
+├── audio_renderer.h      ← интерфейс FastForwardTo()
+└── video_renderer.h      ← интерфейс FastForwardTo()
+
+media/filters/
+├── ffmpeg_demuxer.cc/.h  ← реализация ShouldFastForward(), GetLastPacketTimestamp()
+├── decoder_stream.cc/.h  ← FastForwardTo() — сброс очередей без Reset декодера
+└── video_renderer_algorithm.cc/.h ← DiscardFramesBefore(), HasFrameForTime()
+
+media/renderers/
+├── audio_renderer_impl.cc/.h ← реализация FastForwardTo() для аудио
+├── renderer_impl.cc/.h       ← координация через BarrierClosure
+└── video_renderer_impl.cc/.h ← реализация FastForwardTo() для видео
+```
+
+### Общий медиа-пайплайн (контекст)
 
 ```
 <video> (blink::HTMLMediaElement)
@@ -65,16 +83,22 @@ media::PipelineController
 [media::DataSource, media::Demuxer, media::Renderer]
 ```
 
-**Ключевые компоненты для оптимизации seeking:**
-- `media::WebMediaPlayerImpl` — обрабатывает запросы на seeking от `HTMLMediaElement`
-- `media::FFmpegDemuxer` — отвечает за поиск нужных кадров в видео-файле
-- `media::VideoDecoder` — декодирует найденные кадры
-- `media::VideoRenderer` — управляет рендерингом кадров
-- `media::VideoFrameCompositor` — координирует отображение кадров
+**Архитектурный контекст:** [chromiuminfo/archtecture.md](./chromiuminfo/archtecture.md)  
+**Почему оптимизация в PipelineController, а не в Demuxer:** [chromiuminfo/seek-limitation-and-safari.md](./chromiuminfo/seek-limitation-and-safari.md)
 
-**Подробности:** См. [chromiuminfo/archtecture.md](./chromiuminfo/archtecture.md) для полного описания архитектуры медиа-компонентов, включая инициализацию и запуск воспроизведения, процесс Playback и операцию Seek, а также ссылки на код Chromium.
+---
 
-**Архитектурное ограничение и сравнение с Safari:** См. [chromiuminfo/seek-limitation-and-safari.md](./chromiuminfo/seek-limitation-and-safari.md) — почему нельзя «просто проверить следующий кадр», где происходит сброс при seek, почему оптимизация должна быть в PipelineController/RendererWrapper, а не в Demuxer, и как это решено в WebKit (Safari).
+## Документация
+
+| Документ | Описание |
+|----------|---------|
+| [chromiuminfo/implementation.md](./chromiuminfo/implementation.md) | **Детальное описание патча:** изменённые файлы, схема fast-forward, сравнение путей |
+| [chromiuminfo/issue.md](./chromiuminfo/issue.md) | Описание проблемы и её контекст (Chromium Issue #418456081) |
+| [chromiuminfo/archtecture.md](./chromiuminfo/archtecture.md) | Архитектура медиа-пайплайна Chromium |
+| [chromiuminfo/seek-limitation-and-safari.md](./chromiuminfo/seek-limitation-and-safari.md) | Архитектурные ограничения и сравнение с Safari |
+| [chromiuminfo/build.md](./chromiuminfo/build.md) | Сборка и разработка Chromium |
+
+---
 
 ## Работа с репозиторием Chromium
 
@@ -85,7 +109,9 @@ media::PipelineController
 - **Сборка:** Использование системы сборки GN (Generate Ninja)
 - **Тестирование:** Запуск юнит-тестов и browser-тестов для проверки изменений
 
-**Подробности:** См. [chromiuminfo/build.md](./chromiuminfo/build.md) для полного руководства по работе с репозиторием Chromium.
+**Подробности:** [chromiuminfo/build.md](./chromiuminfo/build.md)
+
+---
 
 ## Дополнительные ресурсы
 

@@ -136,44 +136,33 @@ Chromium предпочитает: *«всегда корректно, пуст�
 
 ---
 
-### 8. Как это можно реализовать (архитектурно правильно)
+### 8. Как это реализовано (патч 3)
 
-**Вариант A (наиболее чистый)**
-
-Добавить новый режим:
+Выбран **Вариант A** — эвристика в `PipelineImpl::RendererWrapper::Seek()` до вызова стандартного пути:
 
 ```cpp
-enum SeekMode {
-  kAccurateSeek,
-  kFastForward
-};
-```
+// media/base/pipeline_impl.cc — RendererWrapper::Seek()
+if (seek_timestamp >= renderer->GetMediaTime() &&
+    demuxer_->ShouldFastForward(seek_timestamp) &&
+    renderer->SupportsFastForward(seek_timestamp)) {
 
-В `PipelineImpl::Seek`:
-
-```cpp
-if (CanFastForward(time)) {
-  renderer_->SetPlaybackTime(time);
-  return;
+  renderer->FastForwardTo(
+      seek_timestamp,
+      base::BindOnce(&RendererWrapper::CompleteFastForwardSeek, ...));
+  return;  // ← стандартный путь (Flush + av_seek_frame) пропускается
 }
-demuxer_->Seek(time);
+// Стандартный путь: AbortPendingReads → Flush → Demuxer::Seek
 ```
 
-**Вариант B (на уровне демультиплексора)**
+`ShouldFastForward()` в `FFmpegDemuxer` возвращает `true` если:
+- цель находится в буферизованных диапазонах (`GetBufferedRanges()`), ИЛИ
+- цель ≤ 2 секунд впереди последнего прочитанного пакета (`GetLastPacketTimestamp()`)
 
-В `FFmpegDemuxer::Seek`:
+`SupportsFastForward()` в `RendererImpl` возвращает `true` только при `state_ == STATE_PLAYING`.
 
-```cpp
-if (time > last_read_timestamp &&
-    time < buffered_end &&
-    no_decoder_reset_needed)
-{
-    // просто discard packets < time
-    return;
-}
-```
+**Вариант B (на уровне демультиплексора) не реализован** — FFmpeg не гарантирует корректность reference frames при произвольном discarding пакетов.
 
-Очень опасно: FFmpeg не гарантирует корректность reference frames.
+**Детали:** [implementation.md](./implementation.md)
 
 ---
 
@@ -400,9 +389,10 @@ performAccurateSeek(time);
 
 ## Итог для оптимизации в Chromium
 
-1. **Место изменений:** PipelineController / RendererWrapper (эвристика до вызова `demuxer_->Seek()`), а не FFmpegDemuxer.  
-2. **Условия fast-forward:** небольшой шаг вперёд, время в buffered range, декодер в рабочем состоянии.  
-3. **Сравнение с Safari:** полезно как глава «Сравнение браузерных движков» и обоснование выбора точки оптимизации.
+1. **Место изменений:** `PipelineImpl::RendererWrapper::Seek()` — эвристика перед вызовом `demuxer_->Seek()`. Реализовано в патче 3.
+2. **Условия fast-forward:** шаг вперёд + данные в буфере/read-head + `STATE_PLAYING`.
+3. **Декодер не сбрасывается:** `DecoderStream::FastForwardTo()` отбрасывает только кадры из очереди, оставляя reference frames нетронутыми.
+4. **Сравнение с Safari:** полезно как глава «Сравнение браузерных движков» — реализованный подход концептуально аналогичен тому, что делает AVFoundation, но без доступа к OS-level media framework.
 
 ---
 
