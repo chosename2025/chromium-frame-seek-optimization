@@ -12,7 +12,6 @@ export const useBenchmarkStore = defineStore('benchmark', () => {
   const progress = ref({ current: 0, total: 0, currentVideo: '' })
   const browserProfile = ref<BrowserProfile | null>(null)
   const tabVisibilityWarning = ref(false)
-  const language = ref<'en' | 'ru'>('en')
 
   function setSelectedVideos(videos: VideoMeta[]): void {
     selectedVideos.value = videos
@@ -42,10 +41,6 @@ export const useBenchmarkStore = defineStore('benchmark', () => {
     tabVisibilityWarning.value = warned
   }
 
-  function setLanguage(nextLanguage: 'en' | 'ru'): void {
-    language.value = nextLanguage
-  }
-
   function loadSnapshot(newResults: BenchmarkResult[], newProfile: BrowserProfile): void {
     results.value = newResults
     browserProfile.value = newProfile
@@ -59,7 +54,6 @@ export const useBenchmarkStore = defineStore('benchmark', () => {
     progress,
     browserProfile,
     tabVisibilityWarning,
-    language,
     setSelectedVideos,
     setResults,
     setLiveSeeks,
@@ -67,7 +61,6 @@ export const useBenchmarkStore = defineStore('benchmark', () => {
     setProgress,
     setBrowserProfile,
     setTabVisibilityWarning,
-    setLanguage,
     loadSnapshot,
   }
 })

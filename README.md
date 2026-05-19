@@ -1,120 +1,61 @@
-# Оптимизация покадровой перемотки HTMLVideoElement в Chromium
+# Chromium Frame Seek Optimization
 
-## Проблема
+This repository contains a Chromium media-pipeline experiment for improving repeated forward seeks on `HTMLVideoElement`, plus a browser benchmark for measuring frame-by-frame seek performance.
 
-При покадровой перемотке видео через `HTMLVideoElement` в Chromium возникает проблема производительности. Операция seeking имеет сложность O(n), где n — количество кадров до целевого момента времени. Это означает, что для получения всех кадров видео (покадровый рендеринг) сложность составляет O(n²).
+## Context
 
-**Основные факты:**
+- Original write-up: [HTML Video Element Seeking Performance](https://stepancar.github.io/articles/articles/html-video-element-seeking/)
+- Chromium issue: [#418456081](https://issues.chromium.org/issues/418456081)
+- Chromium media overview: [media/README.md](https://chromium.googlesource.com/chromium/src/+/HEAD/media/README.md)
 
-- Chromium значительно медленнее Safari при seeking (примерно в 10 раз)
-- Производительность зависит от количества I-фреймов в видео: чем меньше I-фреймов, тем медленнее seeking
-- Для видео с одним I-фреймом seeking в Chromium может занимать ~31.5 мс на кадр, в то время как в Safari ~2.2 мс
+The expensive case is frame-by-frame navigation: applications repeatedly assign nearby increasing `currentTime` values while the video is paused. Chromium normally handles each assignment as a full seek, which flushes renderer/decoder state and asks FFmpeg to seek back to a keyframe.
 
-Эта проблема критична для приложений, требующих покадровой обработки видео (видео-редакторы, рендеринг эффектов и т.д.).
+## Repository Layout
 
-Более подробная статья о проблеме [HTMLVideoElement seeking](https://stepancar.github.io/articles/articles/html-video-element-seeking/) от [@stepancar](https://github.com/stepancar).
+| Path | Purpose |
+| --- | --- |
+| [`patches/4.patch`](./patches/4.patch) | Current Chromium patch. |
+| [`chromiuminfo/problem.md`](./chromiuminfo/problem.md) | Problem summary and links to the original context. |
+| [`chromiuminfo/implementation.md`](./chromiuminfo/implementation.md) | Implementation notes and changed Chromium components. |
+| [`chromiuminfo/patch-4-validation.md`](./chromiuminfo/patch-4-validation.md) | Unit tests and validation commands. |
+| [`benchmark/`](./benchmark/) | Vue + TypeScript benchmark app. |
 
-**Подробности:** См. [chromiuminfo/issue.md](./chromiuminfo/issue.md) для детального описания проблемы и предложенного решения.
+## Patch Summary
 
----
+The patch adds a guarded fast-forward path before Chromium's standard seek path:
 
-## Реализованное решение: Fast-Forward Seek
-
-Патч реализует **«быстрый» путь seek** (`fast-forward`), который исключает полный сброс декодера при последовательных seek-операциях вперёд.
-
-**Ключевая идея:** если целевое время находится впереди текущей позиции и данные уже буферизованы, вместо стандартного `Flush → av_seek_frame → reset` выполняется только отбрасывание устаревших кадров из очереди.
-
-### Условия активации fast-forward
-
-```
-seek_target >= current_time           (шаг вперёд)
- AND FFmpegDemuxer::ShouldFastForward()  (данные в буфере / ≤2с от read-head)
- AND RendererImpl::SupportsFastForward() (STATE_PLAYING)
-```
-
-При несоблюдении любого условия выполняется стандартный seek (обратная совместимость сохранена).
-
-### Ожидаемые улучшения производительности
-
-| Метрика | До патча | После патча |
-|---------|---------|-------------|
-| Время одного seek (1 I-frame видео) | ~31.5 мс | ~2–5 мс |
-| Сложность покадрового рендеринга | O(n²) | O(n) |
-| Сравнение с Safari | ~10× медленнее | Сопоставимо |
-
-**Подробное описание реализации:** [chromiuminfo/implementation.md](./chromiuminfo/implementation.md)
-
----
-
-## Архитектура решения
-
-### Затронутые компоненты
-
-Патч [patches/3.patch](./patches/3.patch) изменяет 11 файлов в 4 директориях:
-
-```
-media/base/
-├── pipeline_impl.cc      ← точка выбора fast-forward vs. standard seek
-├── demuxer.h/.cc         ← новый метод ShouldFastForward()
-├── renderer.h/.cc        ← новые методы SupportsFastForward(), FastForwardTo()
-├── audio_renderer.h      ← интерфейс FastForwardTo()
-└── video_renderer.h      ← интерфейс FastForwardTo()
-
-media/filters/
-├── ffmpeg_demuxer.cc/.h  ← реализация ShouldFastForward(), GetLastPacketTimestamp()
-├── decoder_stream.cc/.h  ← FastForwardTo() — сброс очередей без Reset декодера
-└── video_renderer_algorithm.cc/.h ← DiscardFramesBefore(), HasFrameForTime()
-
-media/renderers/
-├── audio_renderer_impl.cc/.h ← реализация FastForwardTo() для аудио
-├── renderer_impl.cc/.h       ← координация через BarrierClosure
-└── video_renderer_impl.cc/.h ← реализация FastForwardTo() для видео
+```cpp
+if (seek_timestamp >= renderer->GetMediaTime() &&
+    demuxer_->ShouldFastForward(seek_timestamp) &&
+    renderer->SupportsFastForward(seek_timestamp)) {
+  renderer->FastForwardTo(seek_timestamp, ...);
+  return;
+}
 ```
 
-### Общий медиа-пайплайн (контекст)
+When the target is reachable from current demuxer/renderer state, Chromium can discard stale decoded output instead of doing a full `Flush -> av_seek_frame -> decoder reset` cycle. If any safety check fails, the existing seek behavior is used.
 
-```
-<video> (blink::HTMLMediaElement)
-    ↓
-blink/public/platform/media/ (media::WebMediaPlayerImpl)
-    ↓
-media::PipelineController
-    ↓
-[media::DataSource, media::Demuxer, media::Renderer]
+## Chromium Validation
+
+```bash
+autoninja -C out/Default media_unittests
+./out/Default/media_unittests
 ```
 
-**Архитектурный контекст:** [chromiuminfo/archtecture.md](./chromiuminfo/archtecture.md)  
-**Почему оптимизация в PipelineController, а не в Demuxer:** [chromiuminfo/seek-limitation-and-safari.md](./chromiuminfo/seek-limitation-and-safari.md)
+Focused run:
 
----
+```bash
+./out/Default/media_unittests --gtest_filter="PipelineImplTest.FastForwardSeek:RendererImplTest.SupportsFastForwardAudioVideoPausedBothHaveEnough:RendererImplTest.SupportsFastForwardReturnsFalseWhenWaiting"
+```
 
-## Документация
+## Benchmark
 
-| Документ | Описание |
-|----------|---------|
-| [chromiuminfo/implementation.md](./chromiuminfo/implementation.md) | **Детальное описание патча:** изменённые файлы, схема fast-forward, сравнение путей |
-| [chromiuminfo/issue.md](./chromiuminfo/issue.md) | Описание проблемы и её контекст (Chromium Issue #418456081) |
-| [chromiuminfo/archtecture.md](./chromiuminfo/archtecture.md) | Архитектура медиа-пайплайна Chromium |
-| [chromiuminfo/seek-limitation-and-safari.md](./chromiuminfo/seek-limitation-and-safari.md) | Архитектурные ограничения и сравнение с Safari |
-| [chromiuminfo/build.md](./chromiuminfo/build.md) | Сборка и разработка Chromium |
+Local run:
 
----
+```bash
+cd benchmark
+npm install
+npm run dev
+```
 
-## Работа с репозиторием Chromium
-
-Для внесения изменений в Chromium необходимо настроить окружение разработки:
-
-- **Системные требования:** Ubuntu 22.04 LTS, ≥16 ГБ RAM, ≥100 ГБ свободного места
-- **Получение исходного кода:** Использование `depot_tools` для клонирования репозитория
-- **Сборка:** Использование системы сборки GN (Generate Ninja)
-- **Тестирование:** Запуск юнит-тестов и browser-тестов для проверки изменений
-
-**Подробности:** [chromiuminfo/build.md](./chromiuminfo/build.md)
-
----
-
-## Дополнительные ресурсы
-
-- **Chromium Issue Tracker:** [Issue #418456081](https://issues.chromium.org/issues/418456081)
-- **Chromium Media README:** [chromium.googlesource.com/chromium/src/+/HEAD/media/README.md](https://chromium.googlesource.com/chromium/src/+/HEAD/media/README.md)
-- **Статья о проблеме:** [HTMLVideoElement seeking](https://stepancar.github.io/articles/articles/html-video-element-seeking/) от [@stepancar](https://github.com/stepancar)
+GitHub Pages deployment is configured in [`.github/workflows/deploy-benchmark.yml`](./.github/workflows/deploy-benchmark.yml). In repository settings, set Pages source to **GitHub Actions**.

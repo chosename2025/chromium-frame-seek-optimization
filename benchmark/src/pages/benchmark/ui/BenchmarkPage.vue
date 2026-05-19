@@ -82,38 +82,24 @@ watch(
   },
 )
 
-const isRu = computed(() => store.language === 'ru')
+const headerTitle = 'Browser Video Seeking Benchmark'
+const headerSubtitle =
+  'Exhaustive frame-by-frame seek performance across resolutions, fps, and iframe densities'
 
-const headerTitle = computed(() =>
-  isRu.value ? 'Бенчмарк перемотки видео в браузере' : 'Browser Video Seeking Benchmark',
-)
-
-const headerSubtitle = computed(() =>
-  isRu.value
-    ? 'Подробный анализ производительности покадровой перемотки для разных разрешений, частот и плотности I-кадров'
-    : 'Exhaustive frame-by-frame seek performance across resolutions, fps, and iframe densities',
-)
-
-const selectionTitle = computed(() => (isRu.value ? 'Выбор тестов' : 'Video selection'))
+const selectionTitle = 'Video selection'
 const selectedVideosLabel = computed(() =>
-  isRu.value
-    ? `${store.selectedVideos.length} видео выбрано`
-    : `${store.selectedVideos.length} videos selected`,
+  `${store.selectedVideos.length} videos selected`,
 )
-const runButtonLabel = computed(() => (isRu.value ? 'Запустить тест' : 'Run benchmark'))
-const runningTitle = computed(() => (isRu.value ? 'Запуск тестов' : 'Running'))
-const resultsTitle = computed(() => (isRu.value ? 'Результаты' : 'Results'))
+const runButtonLabel = 'Run benchmark'
+const runningTitle = 'Running'
+const resultsTitle = 'Results'
 const combinationsLabel = computed(() =>
-  isRu.value ? `${store.results.length} комбинаций` : `${store.results.length} combinations`,
+  `${store.results.length} combinations`,
 )
 
-const articleLabel = computed(() =>
-  isRu.value ? 'Оригинальная статья' : 'Original article',
-)
+const articleLabel = 'Original article'
 
-const previewTitle = computed(() =>
-  isRu.value ? 'Предпросмотр покадровой перемотки' : 'Frame-by-frame seek preview',
-)
+const previewTitle = 'Frame-by-frame seek preview'
 
 const currentVideoForPreview = computed(() => {
   const currentFilename = store.progress.currentVideo
@@ -147,7 +133,7 @@ async function handleFileUpload(event: Event): Promise<void> {
     store.loadSnapshot(snapshot.results, snapshot.profile)
     step.value = 'results'
   } catch {
-    alert(isRu.value ? 'Ошибка загрузки файла' : 'Failed to load file')
+    alert('Failed to load file')
   }
   target.value = ''
 }
@@ -156,8 +142,8 @@ function triggerFileUpload(): void {
   fileInputRef.value?.click()
 }
 
-const loadFileLabel = computed(() => (isRu.value ? 'Загрузить .vsbench' : 'Load .vsbench'))
-const backToSelectionLabel = computed(() => (isRu.value ? 'Назад к выбору' : 'Back to selection'))
+const loadFileLabel = 'Load .vsbench'
+const backToSelectionLabel = 'Back to selection'
 
 function backToSelection(): void {
   step.value = 'select'
@@ -169,9 +155,7 @@ function backToSelection(): void {
     <div class="border-b">
       <div class="max-w-screen-2xl mx-auto px-6 py-4 flex items-center justify-between">
         <div>
-          <h1 class="text-xl font-semibold tracking-tight">
-            {{ headerTitle }}
-          </h1>
+          <h1 class="text-xl font-semibold tracking-tight">{{ headerTitle }}</h1>
           <p class="text-sm text-muted-foreground mt-0.5">
             {{ headerSubtitle }}
           </p>
@@ -185,24 +169,6 @@ function backToSelection(): void {
           </a>
         </div>
         <div class="flex items-center gap-3">
-          <div class="flex items-center gap-1 border rounded-full px-1 py-0.5 bg-muted/60">
-            <button
-              type="button"
-              class="px-2 py-0.5 text-xs rounded-full"
-              :class="store.language === 'en' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'"
-              @click="store.setLanguage('en')"
-            >
-              EN
-            </button>
-            <button
-              type="button"
-              class="px-2 py-0.5 text-xs rounded-full"
-              :class="store.language === 'ru' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'"
-              @click="store.setLanguage('ru')"
-            >
-              RU
-            </button>
-          </div>
           <Badge v-if="store.browserProfile" variant="outline" class="font-mono text-xs">
             {{ store.browserProfile.browserName }} {{ store.browserProfile.browserVersion }}
           </Badge>
@@ -237,7 +203,7 @@ function backToSelection(): void {
           class="hidden"
           @change="handleFileUpload"
         />
-        <VideoSelector :language="store.language" @update:selected="onVideosSelected" />
+        <VideoSelector @update:selected="onVideosSelected" />
       </div>
 
       <Separator />
@@ -250,7 +216,6 @@ function backToSelection(): void {
           :current-video="store.progress.currentVideo"
           :live-seeks="store.liveSeeks"
           :tab-visibility-warning="store.tabVisibilityWarning"
-          :language="store.language"
           @stop="stopBenchmark"
         />
         <div v-if="currentVideoForPreview" class="space-y-2">
@@ -276,7 +241,7 @@ function backToSelection(): void {
           </div>
           <Badge variant="secondary">{{ combinationsLabel }}</Badge>
         </div>
-        <ResultsDashboard :results="store.results" :profile="store.browserProfile" :language="store.language" />
+        <ResultsDashboard :results="store.results" :profile="store.browserProfile" />
       </div>
     </div>
   </div>

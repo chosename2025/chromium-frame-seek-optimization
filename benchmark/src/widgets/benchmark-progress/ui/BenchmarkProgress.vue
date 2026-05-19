@@ -13,7 +13,6 @@ const props = defineProps<{
   currentVideo: string
   liveSeeks: SeekMeasurement[]
   tabVisibilityWarning: boolean
-  language: 'en' | 'ru'
 }>()
 
 const emit = defineEmits<{
@@ -27,19 +26,9 @@ const progressPercent = computed(() =>
   props.total > 0 ? Math.round((props.current / props.total) * 100) : 0,
 )
 
-const isRu = computed(() => props.language === 'ru')
-
-const warningText = computed(() =>
-  isRu.value
-    ? 'Во время теста вкладка теряла фокус. Результаты могут быть искажены.'
-    : 'Tab visibility change detected during benchmark. Results may be affected.',
-)
-
-const seeksRecordedText = computed(() =>
-  isRu.value ? 'измерений' : 'seeks recorded',
-)
-
-const stopText = computed(() => (isRu.value ? 'Остановить тест' : 'Stop benchmark'))
+const warningText = 'Tab visibility change detected during benchmark. Results may be affected.'
+const seeksRecordedText = 'seeks recorded'
+const stopText = 'Stop benchmark'
 
 function initChart(): void {
   if (!canvasRef.value) return

@@ -1,6 +1,6 @@
 # Browser Video Seeking Benchmark
 
-Production-grade Vue 3 + TypeScript benchmark suite for measuring frame-by-frame video seek performance across resolutions, fps, and iframe densities.
+Vue 3 + TypeScript benchmark suite for measuring frame-by-frame video seek performance across resolutions, fps, audio variants, and I-frame densities.
 
 Inspired by [HTML Video Element Seeking Performance](https://stepancar.github.io/articles/articles/html-video-element-seeking/).
 
@@ -12,14 +12,13 @@ Inspired by [HTML Video Element Seeking Performance](https://stepancar.github.io
 - O(n) degradation detection via linear regression
 - CSV and .vsbench export (JSON snapshot with full results)
 - Load .vsbench files back into the app for analysis
-- Bilingual interface (EN/RU)
-- Wizard-based workflow: select → run → analyze
+- Wizard-based workflow: select -> run -> analyze
 
 ## Architecture
 
 Feature-Sliced Design (FSD) with strict layer imports:
 ```
-app → pages → widgets → features → entities → shared
+app -> pages -> widgets -> features -> entities -> shared
 ```
 
 ## Development

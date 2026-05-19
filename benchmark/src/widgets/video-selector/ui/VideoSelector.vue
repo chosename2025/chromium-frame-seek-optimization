@@ -14,10 +14,6 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-const props = defineProps<{
-  language: 'en' | 'ru'
-}>()
-
 const emit = defineEmits<{
   'update:selected': [videos: VideoMeta[]]
 }>()
@@ -59,59 +55,30 @@ const resolutionOptions: Resolution[] = ['480p', '720p', '1080p', '2160p']
 const fpsOptions: Fps[] = [30, 60]
 const iframeOptions: Array<IframeMultiplier | 'all'> = ['all', 1, 10, 20, 'all', 'one']
 
-const isRu = computed(() => props.language === 'ru')
-
-const labels = computed(() =>
-  isRu.value
-    ? {
-        preset: 'Профиль:',
-        quick: 'Быстрый (5)',
-        standard: 'Стандартный (15)',
-        full: 'Полный (30)',
-        selected: 'выбрано',
-        resolution: 'Разрешение:',
-        fps: 'Кадровая частота:',
-        audio: 'Аудио:',
-        duration: 'Длительность:',
-        iframes: 'I-кадры:',
-        all: 'все',
-        yes: 'есть',
-        no: 'нет',
-        filename: 'Файл',
-        res: 'Разр.',
-        fpsCol: 'FPS',
-        audioCol: 'Аудио',
-        size: 'Размер',
-        iframesCol: 'I-кадры',
-        pframesCol: 'P-кадры',
-        bframesCol: 'B-кадры',
-        durationCol: 'Длительность',
-      }
-    : {
-        preset: 'Preset:',
-        quick: 'Quick (5)',
-        standard: 'Standard (15)',
-        full: 'Full (30)',
-        selected: 'selected',
-        resolution: 'Resolution:',
-        fps: 'FPS:',
-        audio: 'Audio:',
-        duration: 'Duration:',
-        iframes: 'I-frames:',
-        all: 'all',
-        yes: 'yes',
-        no: 'no',
-        filename: 'Filename',
-        res: 'Res',
-        fpsCol: 'FPS',
-        audioCol: 'Audio',
-        size: 'Size',
-        iframesCol: 'I-frames',
-        pframesCol: 'P-frames',
-        bframesCol: 'B-frames',
-        durationCol: 'Duration',
-      },
-)
+const labels = {
+  preset: 'Preset:',
+  quick: 'Quick (5)',
+  standard: 'Standard (15)',
+  full: 'Full (30)',
+  selected: 'selected',
+  resolution: 'Resolution:',
+  fps: 'FPS:',
+  audio: 'Audio:',
+  duration: 'Duration:',
+  iframes: 'I-frames:',
+  all: 'all',
+  yes: 'yes',
+  no: 'no',
+  filename: 'Filename',
+  res: 'Res',
+  fpsCol: 'FPS',
+  audioCol: 'Audio',
+  size: 'Size',
+  iframesCol: 'I-frames',
+  pframesCol: 'P-frames',
+  bframesCol: 'B-frames',
+  durationCol: 'Duration',
+}
 
 const filteredVideos = computed(() => {
   return VIDEO_MANIFEST.filter((v) => {

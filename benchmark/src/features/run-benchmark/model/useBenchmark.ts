@@ -70,7 +70,7 @@ function runPattern(
       } else {
         video.removeEventListener('seeked', onSeeked)
 
-        // Build measurements after all seeks complete — no overhead in hot path
+        // Build measurements after all seeks complete; no overhead in the hot path.
         const measurements: SeekMeasurement[] = []
         let wasInterrupted = false
         for (let i = 0; i < rawTimes.length; i++) {

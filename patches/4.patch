@@ -14,6 +14,38 @@ index f71b1cab2b4eb..d89d35c3a679f 100644
  };
  
  }  // namespace media
+diff --git a/media/base/decoder_buffer_queue.cc b/media/base/decoder_buffer_queue.cc
+index b761c53280f6f..bb7a63470725c 100644
+--- a/media/base/decoder_buffer_queue.cc
++++ b/media/base/decoder_buffer_queue.cc
+@@ -79,4 +79,12 @@ base::TimeDelta DecoderBufferQueue::Duration() {
+   return end - start;
+ }
+ 
++bool DecoderBufferQueue::ContainsTimestamp(base::TimeDelta timestamp) const {
++  if (in_order_queue_.empty())
++    return false;
++
++  return in_order_queue_.front()->timestamp() <= timestamp &&
++         timestamp <= in_order_queue_.back()->timestamp();
++}
++
+ }  // namespace media
+diff --git a/media/base/decoder_buffer_queue.h b/media/base/decoder_buffer_queue.h
+index 3804d23f33e76..dbeb53c616b53 100644
+--- a/media/base/decoder_buffer_queue.h
++++ b/media/base/decoder_buffer_queue.h
+@@ -56,6 +56,10 @@ class MEDIA_EXPORT DecoderBufferQueue {
+   // Returns zero if the queue is empty.
+   base::TimeDelta Duration();
+ 
++  // Returns true if |timestamp| is within the currently queued in-order
++  // timestamp range.
++  bool ContainsTimestamp(base::TimeDelta timestamp) const;
++
+   // Returns the total memory occupied by this class and the buffers it holds,
+   // including the bookkeeping data and buffered data. For simplicity, the
+   // bookkeeping data of this class itself isn't included as it's relatively
 diff --git a/media/base/demuxer.cc b/media/base/demuxer.cc
 index 2cb28712161da..eb4b4df10de5d 100644
 --- a/media/base/demuxer.cc
@@ -43,8 +75,67 @@ index e118c81293030..35f9f57457588 100644
    // Stops this demuxer.
    //
    // After this call the demuxer may be destroyed. It is illegal to call any
+diff --git a/media/base/mock_filters.h b/media/base/mock_filters.h
+index ce694ebf2b970..3040de0ffde7b 100644
+--- a/media/base/mock_filters.h
++++ b/media/base/mock_filters.h
+@@ -188,6 +188,10 @@ class MockDemuxer : public Demuxer {
+   MOCK_METHOD(base::TimeDelta, GetStartTime, (), (const, override));
+   MOCK_METHOD(base::Time, GetTimelineOffset, (), (const, override));
+   MOCK_METHOD(int64_t, GetMemoryUsage, (), (const, override));
++  MOCK_METHOD(bool,
++              ShouldFastForward,
++              (base::TimeDelta media_time),
++              (const, override));
+   MOCK_METHOD(std::optional<container_names::MediaContainerName>,
+               GetContainerForMetrics,
+               (),
+@@ -463,6 +467,12 @@ class MockVideoRenderer : public VideoRenderer {
+   MOCK_METHOD0(OnTimeStopped, void());
+   MOCK_METHOD1(SetLatencyHint,
+                void(std::optional<base::TimeDelta> latency_hint));
++  void FastForwardTo(base::TimeDelta time,
++                     base::OnceClosure callback) override {
++    OnFastForwardTo(time, callback);
++  }
++  MOCK_METHOD2(OnFastForwardTo,
++               void(base::TimeDelta time, base::OnceClosure& callback));
+ };
+ 
+ class MockAudioRenderer : public AudioRenderer {
+@@ -495,6 +505,12 @@ class MockAudioRenderer : public AudioRenderer {
+   MOCK_METHOD1(SetPreservesPitch, void(bool));
+   MOCK_METHOD1(SetWasPlayedWithUserActivationAndHighMediaEngagement,
+                void(bool));
++  void FastForwardTo(base::TimeDelta time,
++                     base::OnceClosure callback) override {
++    OnFastForwardTo(time, callback);
++  }
++  MOCK_METHOD2(OnFastForwardTo,
++               void(base::TimeDelta time, base::OnceClosure& callback));
+ };
+ 
+ class MockRenderer : public Renderer {
+@@ -537,6 +553,17 @@ class MockRenderer : public Renderer {
+                void(std::vector<DemuxerStream*>, base::OnceClosure));
+   MOCK_METHOD2(OnSelectedAudioTracksChanged,
+                void(std::vector<DemuxerStream*>, base::OnceClosure));
++  MOCK_METHOD(bool,
++              SupportsFastForward,
++              (base::TimeDelta media_time),
++              (const, override));
++  void FastForwardTo(base::TimeDelta media_time,
++                     PipelineStatusCallback seek_done_cb) override {
++    OnFastForwardTo(media_time, seek_done_cb);
++  }
++  MOCK_METHOD2(OnFastForwardTo,
++               void(base::TimeDelta media_time,
++                    PipelineStatusCallback& seek_done_cb));
+   RendererType GetRendererType() override { return RendererType::kTest; }
+ 
+   base::WeakPtr<MockRenderer> AsWeakPtr() {
 diff --git a/media/base/pipeline_impl.cc b/media/base/pipeline_impl.cc
-index 5abe6f5bd4e60..2572a1a4e3313 100644
+index 5abe6f5bd4e60..51ab9e2f91524 100644
 --- a/media/base/pipeline_impl.cc
 +++ b/media/base/pipeline_impl.cc
 @@ -260,6 +260,7 @@ class PipelineImpl::RendererWrapper final : public DemuxerHost,
@@ -55,7 +146,7 @@ index 5abe6f5bd4e60..2572a1a4e3313 100644
    void CompleteSuspend(PipelineStatus status);
    void InitializeDemuxer(PipelineStatusCallback done_cb);
    void CreateRenderer(PipelineStatusCallback done_cb);
-@@ -460,19 +461,32 @@ void PipelineImpl::RendererWrapper::Seek(base::TimeDelta time) {
+@@ -460,19 +461,38 @@ void PipelineImpl::RendererWrapper::Seek(base::TimeDelta time) {
    SetState(State::kSeeking);
    renderer_ended_ = false;
  
@@ -67,9 +158,15 @@ index 5abe6f5bd4e60..2572a1a4e3313 100644
 +  // keep the renderer and demuxer state intact and discard old buffered data.
 +  Renderer* renderer = shared_state_.media().renderer.get();
 +
-+  if (seek_timestamp >= renderer->GetMediaTime() &&
-+      demuxer_->ShouldFastForward(seek_timestamp) &&
-+      renderer->SupportsFastForward(seek_timestamp)) {
++  const base::TimeDelta renderer_time = renderer->GetMediaTime();
++  const bool forward_seek = seek_timestamp >= renderer_time;
++  const bool demuxer_fast_forward =
++      forward_seek && demuxer_->ShouldFastForward(seek_timestamp);
++  const bool renderer_fast_forward =
++      forward_seek && demuxer_fast_forward &&
++      renderer->SupportsFastForward(seek_timestamp);
++
++  if (forward_seek && demuxer_fast_forward && renderer_fast_forward) {
 +    renderer->FastForwardTo(
 +        seek_timestamp,
 +        base::BindOnce(&RendererWrapper::CompleteFastForwardSeek,
@@ -93,7 +190,7 @@ index 5abe6f5bd4e60..2572a1a4e3313 100644
  
    // Seek demuxer.
    bound_fns.Push(base::BindOnce(&Demuxer::Seek, base::Unretained(demuxer_),
-@@ -1149,6 +1163,31 @@ void PipelineImpl::RendererWrapper::CompleteSeek(base::TimeDelta seek_time,
+@@ -1149,6 +1169,31 @@ void PipelineImpl::RendererWrapper::CompleteSeek(base::TimeDelta seek_time,
        base::BindOnce(&PipelineImpl::OnSeekDone, weak_pipeline_, false));
  }
  
@@ -125,6 +222,45 @@ index 5abe6f5bd4e60..2572a1a4e3313 100644
  void PipelineImpl::RendererWrapper::CompleteSuspend(PipelineStatus status) {
    DVLOG(1) << __func__ << ": status=" << status;
    DCHECK_CALLED_ON_VALID_SEQUENCE(shared_state_.media_sequence_checker);
+diff --git a/media/base/pipeline_impl_unittest.cc b/media/base/pipeline_impl_unittest.cc
+index 7fed933e79bc7..b17d478604049 100644
+--- a/media/base/pipeline_impl_unittest.cc
++++ b/media/base/pipeline_impl_unittest.cc
+@@ -125,6 +125,8 @@ class PipelineImplTest : public ::testing::Test {
+         .WillRepeatedly(Return(base::TimeDelta()));
+ 
+     EXPECT_CALL(*demuxer_, GetStartTime()).WillRepeatedly(Return(start_time_));
++    EXPECT_CALL(*demuxer_, ShouldFastForward(_))
++        .WillRepeatedly(Return(false));
+ 
+     EXPECT_CALL(*renderer_, SetPreservesPitch(true)).Times(AnyNumber());
+   }
+@@ -569,6 +571,25 @@ TEST_F(PipelineImplTest, Seek) {
+   DoSeek(expected);
+ }
+ 
++TEST_F(PipelineImplTest, FastForwardSeek) {
++  CreateAudioAndVideoStream();
++  SetDemuxerExpectations(base::Seconds(3000));
++
++  StartPipelineAndExpect(PIPELINE_OK);
++
++  base::TimeDelta expected = base::Seconds(2000);
++  EXPECT_CALL(*demuxer_, ShouldFastForward(expected))
++      .WillRepeatedly(Return(true));
++  EXPECT_CALL(*renderer_, SupportsFastForward(expected))
++      .WillRepeatedly(Return(true));
++  EXPECT_CALL(*renderer_, OnFastForwardTo(expected, _))
++      .WillOnce(RunOnceCallback<1>(PIPELINE_OK));
++  EXPECT_CALL(*renderer_, SetPlaybackRate(_));
++  EXPECT_CALL(callbacks_, OnSeek(HasStatusCode(PIPELINE_OK)));
++
++  DoSeek(expected);
++}
++
+ TEST_F(PipelineImplTest, SeekAfterError) {
+   CreateAudioStream();
+   SetDemuxerExpectations(base::Seconds(3000));
 diff --git a/media/base/renderer.cc b/media/base/renderer.cc
 index e1d636ab49f81..8cee80e93a546 100644
 --- a/media/base/renderer.cc
@@ -285,13 +421,18 @@ index bb6c5667eddc4..4838f98fafdd5 100644
  
    int fallback_buffers_being_decoded_ = 0;
 diff --git a/media/filters/ffmpeg_demuxer.cc b/media/filters/ffmpeg_demuxer.cc
-index 6304769735099..8b8081cf5cc39 100644
+index 6304769735099..d42966ac127ac 100644
 --- a/media/filters/ffmpeg_demuxer.cc
 +++ b/media/filters/ffmpeg_demuxer.cc
-@@ -788,6 +788,10 @@ Ranges<base::TimeDelta> FFmpegDemuxerStream::GetBufferedRanges() const {
+@@ -788,6 +788,15 @@ Ranges<base::TimeDelta> FFmpegDemuxerStream::GetBufferedRanges() const {
    return buffered_ranges_;
  }
  
++bool FFmpegDemuxerStream::HasQueuedPacketFor(
++    base::TimeDelta timestamp) const {
++  return buffer_queue_.ContainsTimestamp(timestamp);
++}
++
 +base::TimeDelta FFmpegDemuxerStream::GetLastPacketTimestamp() const {
 +  return last_packet_timestamp_;
 +}
@@ -299,7 +440,7 @@ index 6304769735099..8b8081cf5cc39 100644
  void FFmpegDemuxerStream::SatisfyPendingRead() {
    DCHECK(task_runner_->RunsTasksInCurrentSequence());
    if (read_cb_) {
-@@ -1085,6 +1089,55 @@ void FFmpegDemuxer::SeekInternal(base::TimeDelta time,
+@@ -1085,6 +1094,36 @@ void FFmpegDemuxer::SeekInternal(base::TimeDelta time,
        std::move(seek_cb));
  }
  
@@ -309,60 +450,46 @@ index 6304769735099..8b8081cf5cc39 100644
 +      GetFirstEnabledFFmpegStream(DemuxerStream::VIDEO);
 +  if (!ref_stream)
 +    ref_stream = GetFirstEnabledFFmpegStream(DemuxerStream::AUDIO);
-+  if (!ref_stream) {
-+    DVLOG(2) << __func__ << "(" << media_time << "): no stream";
++  if (!ref_stream)
 +    return false;
-+  }
 +
-+  const Ranges<base::TimeDelta> ranges = ref_stream->GetBufferedRanges();
-+  if (ranges.empty()) {
-+    DVLOG(2) << __func__ << "(" << media_time << "): no buffered ranges";
-+    return false;
-+  }
-+
-+  const base::TimeDelta buffer_start = ranges.start(0);
-+  const base::TimeDelta buffer_end = ranges.end(ranges.size() - 1);
-+
-+  // Data for targets inside the buffered range is already in memory.
-+  if (media_time >= buffer_start && media_time <= buffer_end) {
-+    DVLOG(1) << __func__ << "(" << media_time << "): in buffer ["
-+             << buffer_start << ", " << buffer_end << "]";
++  // Data still queued in the demuxer can be consumed without an FFmpeg seek.
++  // Do not use GetBufferedRanges() here: it is historical buffered metadata and
++  // may include packets already handed off to downstream decoders.
++  if (ref_stream->HasQueuedPacketFor(media_time))
 +    return true;
-+  }
 +
-+  // Nearby targets ahead of the read head can be reached by reading forward.
++  // Targets near the read head can be reached without a full FFmpeg seek:
++  // behind it by dropping already-read data, or ahead by reading forward.
 +  const base::TimeDelta last_read = ref_stream->GetLastPacketTimestamp();
-+  if (last_read == kNoTimestamp) {
-+    DVLOG(2) << __func__ << "(" << media_time << "): no read head";
++  if (last_read == kNoTimestamp)
 +    return false;
-+  }
 +
-+  // Seeking backward requires av_seek_frame.
-+  if (media_time < last_read) {
-+    DVLOG(1) << __func__ << "(" << media_time << "): backward seek (read head="
-+             << last_read << ")";
-+    return false;
++  constexpr base::TimeDelta kMaxReadAhead = base::Seconds(5);
++  if (media_time <= last_read) {
++    return (last_read - media_time) <= kMaxReadAhead;
 +  }
 +
 +  constexpr base::TimeDelta kMaxLookahead = base::Seconds(2);
-+  const bool result = (media_time - last_read) <= kMaxLookahead;
-+  DVLOG(1) << __func__ << "(" << media_time << "): read_head=" << last_read
-+           << " lookahead=" << (media_time - last_read)
-+           << " result=" << result;
-+  return result;
++  return (media_time - last_read) <= kMaxLookahead;
 +}
 +
  base::Time FFmpegDemuxer::GetTimelineOffset() const {
    return timeline_offset_;
  }
 diff --git a/media/filters/ffmpeg_demuxer.h b/media/filters/ffmpeg_demuxer.h
-index 5499334c3b984..18a8d1d45b129 100644
+index 5499334c3b984..8c693967bc356 100644
 --- a/media/filters/ffmpeg_demuxer.h
 +++ b/media/filters/ffmpeg_demuxer.h
-@@ -115,6 +115,10 @@ class MEDIA_EXPORT FFmpegDemuxerStream : public DemuxerStream {
+@@ -115,6 +115,15 @@ class MEDIA_EXPORT FFmpegDemuxerStream : public DemuxerStream {
    // Returns the range of buffered data in this stream.
    Ranges<base::TimeDelta> GetBufferedRanges() const;
  
++  // Returns true if |timestamp| is within the stream's currently queued packet
++  // range. Unlike GetBufferedRanges(), this only reports data that can still be
++  // read without an FFmpeg seek.
++  bool HasQueuedPacketFor(base::TimeDelta timestamp) const;
++
 +  // Returns the timestamp of the last packet enqueued by the demuxer.
 +  // This reflects how far FFmpeg has read ahead in the file/stream.
 +  base::TimeDelta GetLastPacketTimestamp() const;
@@ -370,7 +497,7 @@ index 5499334c3b984..18a8d1d45b129 100644
    // Returns true if this stream has capacity for additional data.
    bool HasAvailableCapacity();
  
-@@ -212,6 +216,7 @@ class MEDIA_EXPORT FFmpegDemuxer : public Demuxer {
+@@ -212,6 +221,7 @@ class MEDIA_EXPORT FFmpegDemuxer : public Demuxer {
    void CancelPendingSeek(base::TimeDelta seek_time) override;
    void Seek(base::TimeDelta time, PipelineStatusCallback cb) override;
    bool IsSeekable() const override;
@@ -379,20 +506,10 @@ index 5499334c3b984..18a8d1d45b129 100644
    std::vector<DemuxerStream*> GetAllStreams() override;
    base::TimeDelta GetStartTime() const override;
 diff --git a/media/filters/video_renderer_algorithm.cc b/media/filters/video_renderer_algorithm.cc
-index b04453f090cf7..e95f5896b23a7 100644
+index b04453f090cf7..a6e3b534abcea 100644
 --- a/media/filters/video_renderer_algorithm.cc
 +++ b/media/filters/video_renderer_algorithm.cc
-@@ -75,7 +75,8 @@ scoped_refptr<VideoFrame> VideoRendererAlgorithm::Render(
-   if (!was_time_moving_ || !have_known_duration || render_interval_.is_zero()) {
-     ReadyFrame& ready_frame = frame_queue_.front();
-     DCHECK(ready_frame.frame);
--    ++ready_frame.render_count;
-+    if (!ready_frame.render_count)
-+      ready_frame.render_count = 1;
-     UpdateEffectiveFramesQueued();
- 
-     // If time stops, we should reset the |first_frame_| marker.
-@@ -316,6 +317,70 @@ void VideoRendererAlgorithm::Reset(ResetFlag reset_flag) {
+@@ -316,6 +316,70 @@ void VideoRendererAlgorithm::Reset(ResetFlag reset_flag) {
    max_acceptable_drift_ = base::Milliseconds(15);
  }
  
@@ -491,10 +608,18 @@ index 96f0cb2498391..d378bae0330d1 100644
    // assuming current Render() interval trends.
    //
 diff --git a/media/renderers/audio_renderer_impl.cc b/media/renderers/audio_renderer_impl.cc
-index 3e44dcff88cae..371db5cd03ffb 100644
+index 3e44dcff88cae..9fda88f0bc74a 100644
 --- a/media/renderers/audio_renderer_impl.cc
 +++ b/media/renderers/audio_renderer_impl.cc
-@@ -376,6 +376,47 @@ void AudioRendererImpl::StartPlaying() {
+@@ -336,6 +336,7 @@ void AudioRendererImpl::DoFlush_Locked() {
+   DCHECK_EQ(state_, kFlushed);
+ 
+   ended_timestamp_ = kInfiniteDuration;
++  fast_forward_cb_.Reset();
+   audio_decoder_stream_->Reset(base::BindOnce(
+       &AudioRendererImpl::ResetDecoderDone, weak_factory_.GetWeakPtr()));
+ }
+@@ -376,6 +377,50 @@ void AudioRendererImpl::StartPlaying() {
    AttemptRead_Locked();
  }
  
@@ -502,6 +627,7 @@ index 3e44dcff88cae..371db5cd03ffb 100644
 +                                      base::OnceClosure callback) {
 +  DVLOG(1) << __func__ << "(" << time << ")";
 +  DCHECK(task_runner_->RunsTasksInCurrentSequence());
++  base::OnceClosure ready_cb;
 +
 +  // Evict stale decoded buffers from the decoder stream's output queues and
 +  // set the drop threshold for any in-flight frames before |time|.
@@ -513,6 +639,8 @@ index 3e44dcff88cae..371db5cd03ffb 100644
 +  {
 +    base::AutoLock auto_lock(lock_);
 +    DCHECK_EQ(state_, kPlaying);
++    DCHECK(!fast_forward_cb_);
++    fast_forward_cb_ = std::move(callback);
 +
 +    start_timestamp_ = time;
 +    ended_timestamp_ = kInfiniteDuration;
@@ -529,21 +657,31 @@ index 3e44dcff88cae..371db5cd03ffb 100644
 +    // Drop any decoded audio that the algorithm is still holding.
 +    algorithm_->FlushBuffers();
 +
-+    if (buffering_state_ != BUFFERING_HAVE_NOTHING)
-+      SetBufferingState_Locked(BUFFERING_HAVE_NOTHING);
 +    AttemptRead_Locked();
++
++    if (received_end_of_stream_ || algorithm_->IsQueueAdequateForPlayback())
++      ready_cb = std::move(fast_forward_cb_);
 +  }
 +
-+  // Audio can complete immediately; the sink will output silence until new
-+  // decoded buffers arrive from the decoder stream.
-+  std::move(callback).Run();
++  if (ready_cb)
++    std::move(ready_cb).Run();
 +}
 +
  void AudioRendererImpl::Initialize(DemuxerStream* stream,
                                     CdmContext* cdm_context,
                                     RendererClient* client,
+@@ -1186,6 +1231,9 @@ bool AudioRendererImpl::HandleDecodedBuffer_Locked(
+       if (received_end_of_stream_ || algorithm_->IsQueueAdequateForPlayback()) {
+         if (buffering_state_ == BUFFERING_HAVE_NOTHING)
+           SetBufferingState_Locked(BUFFERING_HAVE_ENOUGH);
++        if (fast_forward_cb_) {
++          task_runner_->PostTask(FROM_HERE, std::move(fast_forward_cb_));
++        }
+         // This must be done after SetBufferingState_Locked() to ensure the
+         // proper state transitions for higher levels.
+         if (should_render_end_of_stream) {
 diff --git a/media/renderers/audio_renderer_impl.h b/media/renderers/audio_renderer_impl.h
-index e060e59f2fe04..0df9e83b16fe5 100644
+index e060e59f2fe04..019209ff54437 100644
 --- a/media/renderers/audio_renderer_impl.h
 +++ b/media/renderers/audio_renderer_impl.h
 @@ -111,6 +111,8 @@ class MEDIA_EXPORT AudioRendererImpl
@@ -555,8 +693,18 @@ index e060e59f2fe04..0df9e83b16fe5 100644
  
    // base::PowerSuspendObserver implementation.
    void OnSuspend() override;
+@@ -316,6 +318,9 @@ class MEDIA_EXPORT AudioRendererImpl
+   // Callback provided to Flush().
+   base::OnceClosure flush_cb_;
+ 
++  // Callback provided to FastForwardTo().
++  base::OnceClosure fast_forward_cb_;
++
+   // Overridable tick clock for testing.
+   raw_ptr<const base::TickClock> tick_clock_;
+ 
 diff --git a/media/renderers/renderer_impl.cc b/media/renderers/renderer_impl.cc
-index 17ef858084749..926a82d86bef7 100644
+index 17ef858084749..f59dd4d7b8415 100644
 --- a/media/renderers/renderer_impl.cc
 +++ b/media/renderers/renderer_impl.cc
 @@ -7,6 +7,7 @@
@@ -567,12 +715,21 @@ index 17ef858084749..926a82d86bef7 100644
  #include "base/command_line.h"
  #include "base/compiler_specific.h"
  #include "base/functional/bind.h"
-@@ -1074,4 +1075,67 @@ RendererType RendererImpl::GetRendererType() {
+@@ -1074,4 +1075,80 @@ RendererType RendererImpl::GetRendererType() {
    return RendererType::kRendererImpl;
  }
  
 +bool RendererImpl::SupportsFastForward(base::TimeDelta /* media_time */) const {
-+  return state_ == STATE_PLAYING;
++  DCHECK(task_runner_->RunsTasksInCurrentSequence());
++  const bool waiting_for_data = WaitingForEnoughData();
++  // Allow fast-forward when playing, or when paused but a video renderer exists
++  // (covers both video-only and audio+video). The !waiting_for_data guard below
++  // ensures both renderers already have HAVE_ENOUGH before we skip a full flush.
++  const bool result =
++      state_ == STATE_PLAYING &&
++      (playback_rate_ > 0 || !!video_renderer_) &&
++      !waiting_for_data;
++  return result;
 +}
 +
 +void RendererImpl::FastForwardTo(base::TimeDelta media_time,
@@ -584,6 +741,8 @@ index 17ef858084749..926a82d86bef7 100644
 +  if (time_ticking_) {
 +    time_ticking_ = false;
 +    time_source_->StopTicking();
++    if (playback_rate_ > 0 && video_renderer_)
++      video_renderer_->OnTimeStopped();
 +  }
 +  time_source_->SetMediaTime(media_time);
 +
@@ -618,11 +777,6 @@ index 17ef858084749..926a82d86bef7 100644
 +  }
 +
 +  const bool have_enough = !WaitingForEnoughData();
-+  if (restart_ticking && !time_ticking_ && have_enough) {
-+    time_ticking_ = true;
-+    time_source_->StartTicking();
-+  }
-+
 +  std::move(seek_done_cb).Run(PIPELINE_OK);
 +
 +  // WebMediaPlayerImpl::DoSeek() reduces the ready state when a seek starts.
@@ -631,6 +785,13 @@ index 17ef858084749..926a82d86bef7 100644
 +  if (have_enough) {
 +    client_->OnBufferingStateChange(BUFFERING_HAVE_ENOUGH,
 +                                    BUFFERING_CHANGE_REASON_UNKNOWN);
++  }
++
++  if (restart_ticking && !time_ticking_ && have_enough) {
++    time_ticking_ = true;
++    time_source_->StartTicking();
++    if (playback_rate_ > 0 && video_renderer_)
++      video_renderer_->OnTimeProgressing();
 +  }
 +}
 +
@@ -658,8 +819,59 @@ index 22d5f954ffbd8..7d8eb8b20faa9 100644
  
    // Callbacks executed when a renderer has ended.
    void OnRendererEnded(DemuxerStream::Type type);
+diff --git a/media/renderers/renderer_impl_unittest.cc b/media/renderers/renderer_impl_unittest.cc
+index 54e4bf1fbdd86..f08b77c9dcfe1 100644
+--- a/media/renderers/renderer_impl_unittest.cc
++++ b/media/renderers/renderer_impl_unittest.cc
+@@ -96,7 +96,10 @@ class RendererImplTest : public ::testing::Test {
+   RendererImplTest(const RendererImplTest&) = delete;
+   RendererImplTest& operator=(const RendererImplTest&) = delete;
+ 
+-  ~RendererImplTest() override { Destroy(); }
++  ~RendererImplTest() override {
++    Destroy();
++    SetMediaClient(nullptr);
++  }
+ 
+  protected:
+   void Destroy() {
+@@ -1101,4 +1104,34 @@ TEST_F(RendererImplTest, SuppressAudioTracks) {
+   Mock::VerifyAndClearExpectations(&time_source_);
+ }
+ 
++// Verifies that SupportsFastForward returns true for audio+video when both
++// renderers have HAVE_ENOUGH data and playback_rate == 0 (paused). This covers
++// the real-world benchmark scenario of frequent small forward seeks while
++// paused.
++TEST_F(RendererImplTest, SupportsFastForwardAudioVideoPausedBothHaveEnough) {
++  InitializeWithAudioAndVideo();
++  // After Play(), state_ == STATE_PLAYING, playback_rate_ == 0 (default),
++  // both renderers emit HAVE_ENOUGH via ON_CALL defaults in InitializeAndExpect.
++  Play();
++  EXPECT_TRUE(renderer_impl_->SupportsFastForward(base::Milliseconds(200)));
++}
++
++// Verifies that SupportsFastForward returns false when a renderer is still
++// buffering (HAVE_NOTHING), so we don't attempt fast-forward without data.
++TEST_F(RendererImplTest, SupportsFastForwardReturnsFalseWhenWaiting) {
++  InitializeWithAudioAndVideo();
++  Play();
++
++  // Simulate audio underflow, which puts renderer into a waiting state.
++  EXPECT_CALL(time_source_, StopTicking());
++  EXPECT_CALL(callbacks_,
++              OnBufferingStateChange(BUFFERING_HAVE_NOTHING,
++                                     BUFFERING_CHANGE_REASON_UNKNOWN));
++  audio_renderer_client_->OnBufferingStateChange(
++      BUFFERING_HAVE_NOTHING, BUFFERING_CHANGE_REASON_UNKNOWN);
++  base::RunLoop().RunUntilIdle();
++
++  EXPECT_FALSE(renderer_impl_->SupportsFastForward(base::Milliseconds(200)));
++}
++
+ }  // namespace media
 diff --git a/media/renderers/video_renderer_impl.cc b/media/renderers/video_renderer_impl.cc
-index a342b81050aca..40ee88c27d6cc 100644
+index a342b81050aca..9c5ffbe48e9cd 100644
 --- a/media/renderers/video_renderer_impl.cc
 +++ b/media/renderers/video_renderer_impl.cc
 @@ -121,6 +121,7 @@ void VideoRendererImpl::Flush(base::OnceClosure callback) {
@@ -670,7 +882,7 @@ index a342b81050aca..40ee88c27d6cc 100644
    video_decoder_stream_->Reset(
        base::BindOnce(&VideoRendererImpl::OnVideoDecoderStreamResetDone,
                       weak_factory_.GetWeakPtr()));
-@@ -156,6 +157,59 @@ void VideoRendererImpl::StartPlayingFrom(base::TimeDelta timestamp) {
+@@ -156,6 +157,58 @@ void VideoRendererImpl::StartPlayingFrom(base::TimeDelta timestamp) {
    AttemptRead_Locked();
  }
  
@@ -708,7 +920,6 @@ index a342b81050aca..40ee88c27d6cc 100644
 +      // Request fresh decoded output when the retained queue has no frame
 +      // usable for the target timestamp.
 +      video_decoder_stream_->FastForwardTo(start_timestamp_);
-+      TransitionToHaveNothing_Locked();
 +      AttemptRead_Locked();
 +    }
 +
@@ -730,7 +941,7 @@ index a342b81050aca..40ee88c27d6cc 100644
  void VideoRendererImpl::Initialize(
      DemuxerStream* stream,
      CdmContext* cdm_context,
-@@ -649,6 +703,13 @@ void VideoRendererImpl::FrameReady(VideoDecoderStream::ReadResult result) {
+@@ -649,6 +702,13 @@ void VideoRendererImpl::FrameReady(VideoDecoderStream::ReadResult result) {
      // than ideal frames prior to startup.  We don't use IsBeforeStartTime()
      // here since it's based on a duration estimate and we can be exact here.
      if (!sink_started_ && frame->timestamp() <= start_timestamp_) {
@@ -744,7 +955,7 @@ index a342b81050aca..40ee88c27d6cc 100644
        algorithm_->Reset();
        fps_estimator_.Reset();
        ReportFrameRateIfNeeded_Locked();
-@@ -723,12 +784,23 @@ void VideoRendererImpl::FrameReady(VideoDecoderStream::ReadResult result) {
+@@ -723,12 +783,23 @@ void VideoRendererImpl::FrameReady(VideoDecoderStream::ReadResult result) {
    if (buffering_state_ == BUFFERING_HAVE_NOTHING && HaveEnoughData_Locked())
      TransitionToHaveEnough_Locked();
  
@@ -768,7 +979,7 @@ index a342b81050aca..40ee88c27d6cc 100644
  }
  
  bool VideoRendererImpl::HaveEnoughData_Locked() const {
-@@ -791,6 +863,20 @@ void VideoRendererImpl::TransitionToHaveNothing_Locked() {
+@@ -791,6 +862,20 @@ void VideoRendererImpl::TransitionToHaveNothing_Locked() {
                                  weak_factory_.GetWeakPtr(), buffering_state_));
  }
  
@@ -789,7 +1000,7 @@ index a342b81050aca..40ee88c27d6cc 100644
  void VideoRendererImpl::AddReadyFrame_Locked(scoped_refptr<VideoFrame> frame) {
    DCHECK(task_runner_->RunsTasksInCurrentSequence());
    lock_.AssertAcquired();
-@@ -1091,7 +1177,7 @@ void VideoRendererImpl::PaintFirstFrame() {
+@@ -1091,7 +1176,7 @@ void VideoRendererImpl::PaintFirstFrame() {
    PaintFirstFrame_Locked();
  }
  
@@ -798,7 +1009,7 @@ index a342b81050aca..40ee88c27d6cc 100644
    DCHECK(task_runner_->RunsTasksInCurrentSequence());
    lock_.AssertAcquired();
  
-@@ -1104,7 +1190,7 @@ void VideoRendererImpl::PaintFirstFrame_Locked() {
+@@ -1104,7 +1189,7 @@ void VideoRendererImpl::PaintFirstFrame_Locked() {
    auto first_frame =
        algorithm_->Render(base::TimeTicks(), base::TimeTicks(), nullptr);
    DCHECK(first_frame);

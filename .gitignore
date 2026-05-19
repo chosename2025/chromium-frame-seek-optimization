@@ -1,1 +1,22 @@
-codex
+# Local agent/runtime files
+.codex
+.agents/
+
+# Dependencies and generated frontend output
+node_modules/
+dist/
+dist-ssr/
+*.tsbuildinfo
+
+# Logs and local editor state
+*.log
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Thesis/private working material
+diplom/
+tmp/
+test-2/
+additional_sources/

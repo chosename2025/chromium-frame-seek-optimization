@@ -45,7 +45,6 @@ Chart.register(
 const props = defineProps<{
   results: BenchmarkResult[]
   profile: BrowserProfile
-  language: 'en' | 'ru'
 }>()
 
 const { exportCsv, exportBenchmark, lastExportTimestamp, lastExportSizeBytes, isExporting } = useExport()
@@ -90,87 +89,42 @@ const sortedResults = computed(() => {
   })
 })
 
-const isRu = computed(() => props.language === 'ru')
+const tabLabels = { table: 'Table', charts: 'Charts', browser: 'Browser', export: 'Export' }
 
-const tabLabels = computed(() =>
-  isRu.value
-    ? { table: 'Таблица', charts: 'Графики', browser: 'Браузер', export: 'Экспорт' }
-    : { table: 'Table', charts: 'Charts', browser: 'Browser', export: 'Export' },
-)
+const exportTexts = {
+  title: 'Export results',
+  downloadCsv: 'Download CSV',
+  downloadBenchmark: 'Download .vsbench',
+  buildingBenchmark: 'Building file...',
+  lastExport: 'Last export',
+  fileSize: 'File size',
+  benchmarkDescription:
+    '.vsbench file contains all results, browser profile, and can be loaded back for analysis',
+  estimatedSize: 'Estimated size',
+  kb: 'KB',
+}
 
-const exportTexts = computed(() =>
-  isRu.value
-    ? {
-        title: 'Экспорт результатов',
-        downloadCsv: 'Скачать CSV',
-        downloadBenchmark: 'Скачать .vsbench',
-        buildingBenchmark: 'Формирование файла...',
-        lastExport: 'Последний экспорт',
-        fileSize: 'Размер файла',
-        benchmarkDescription:
-          '.vsbench файл содержит все результаты, профиль браузера и может быть загружен обратно для анализа',
-        estimatedSize: 'Оценочный размер',
-        kb: 'КБ',
-      }
-    : {
-        title: 'Export results',
-        downloadCsv: 'Download CSV',
-        downloadBenchmark: 'Download .vsbench',
-        buildingBenchmark: 'Building file...',
-        lastExport: 'Last export',
-        fileSize: 'File size',
-        benchmarkDescription:
-          '.vsbench file contains all results, browser profile, and can be loaded back for analysis',
-        estimatedSize: 'Estimated size',
-        kb: 'KB',
-      },
-)
-
-const chartTexts = computed(() =>
-  isRu.value
-    ? {
-        meanSeekTime: 'Среднее время перемотки по разрешению и FPS',
-        seekIndexVsTime: 'Индекс перемотки vs время (обнаружение O(n))',
-        heatmap: 'Тепловая карта: разрешение x множитель I-кадров (медиана мс)',
-        iframeVsSeekFps: 'Количество I-кадров vs скорость перемотки',
-        audioComparison: 'Сравнение времени перемотки: с аудио vs без аудио',
-        boxPlot: 'Распределение времени перемотки (аппроксимация box plot)',
-        fps30: '30fps',
-        fps60: '60fps',
-        seekIndex: 'Индекс перемотки',
-        seekTime: 'Время (мс)',
-        iframeCount: 'Количество I-кадров',
-        seekFps: 'Скорость перемотки (FPS)',
-        withAudio: 'С аудио',
-        noAudio: 'Без аудио',
-        min: 'Мин',
-        p25: 'P25',
-        median: 'Медиана',
-        p75: 'P75',
-        max: 'Макс',
-      }
-    : {
-        meanSeekTime: 'Mean seek time by resolution and FPS',
-        seekIndexVsTime: 'Seek index vs seek time (O(n) detection)',
-        heatmap: 'Resolution x I-frame multiplier heatmap (median ms)',
-        iframeVsSeekFps: 'I-frame count vs seek FPS',
-        audioComparison: 'Audio vs no-audio seek time comparison',
-        boxPlot: 'Seek time distribution (box plot approximation)',
-        fps30: '30fps',
-        fps60: '60fps',
-        seekIndex: 'Seek index',
-        seekTime: 'Time (ms)',
-        iframeCount: 'I-frame count',
-        seekFps: 'Seek FPS',
-        withAudio: 'With audio',
-        noAudio: 'No audio',
-        min: 'Min',
-        p25: 'P25',
-        median: 'Median',
-        p75: 'P75',
-        max: 'Max',
-      },
-)
+const chartTexts = {
+  meanSeekTime: 'Mean seek time by resolution and FPS',
+  seekIndexVsTime: 'Seek index vs seek time (O(n) detection)',
+  heatmap: 'Resolution x I-frame multiplier heatmap (median ms)',
+  iframeVsSeekFps: 'I-frame count vs seek FPS',
+  audioComparison: 'Audio vs no-audio seek time comparison',
+  boxPlot: 'Seek time distribution (box plot approximation)',
+  fps30: '30fps',
+  fps60: '60fps',
+  seekIndex: 'Seek index',
+  seekTime: 'Time (ms)',
+  iframeCount: 'I-frame count',
+  seekFps: 'Seek FPS',
+  withAudio: 'With audio',
+  noAudio: 'No audio',
+  min: 'Min',
+  p25: 'P25',
+  median: 'Median',
+  p75: 'P75',
+  max: 'Max',
+}
 
 function meanBadgeVariant(mean: number): 'default' | 'secondary' | 'destructive' {
   if (mean < 50) return 'default'
@@ -227,8 +181,8 @@ function buildBarResolutionChart(): void {
     data: {
       labels: resolutions,
       datasets: [
-        { label: chartTexts.value.fps30, data: fps30Data, backgroundColor: CHART_COLORS[0] },
-        { label: chartTexts.value.fps60, data: fps60Data, backgroundColor: CHART_COLORS[1] },
+        { label: chartTexts.fps30, data: fps30Data, backgroundColor: CHART_COLORS[0] },
+        { label: chartTexts.fps60, data: fps60Data, backgroundColor: CHART_COLORS[1] },
       ],
     },
     options: {
@@ -236,7 +190,7 @@ function buildBarResolutionChart(): void {
       maintainAspectRatio: false,
       plugins: { legend: { position: 'top' } },
       scales: {
-        y: { title: { display: true, text: chartTexts.value.seekTime } },
+        y: { title: { display: true, text: chartTexts.seekTime } },
       },
     },
   })
@@ -260,8 +214,8 @@ function buildScatterChart(): void {
       maintainAspectRatio: false,
       plugins: { legend: { position: 'top' } },
       scales: {
-        x: { title: { display: true, text: chartTexts.value.seekIndex } },
-        y: { title: { display: true, text: chartTexts.value.seekTime }, min: 0 },
+        x: { title: { display: true, text: chartTexts.seekIndex } },
+        y: { title: { display: true, text: chartTexts.seekTime }, min: 0 },
       },
     },
   })
@@ -284,7 +238,7 @@ function buildIframeLineChart(): void {
       labels: sorted.map(([k]) => String(k)),
       datasets: [
         {
-          label: chartTexts.value.seekFps,
+          label: chartTexts.seekFps,
           data: sorted.map(([, v]) => v.reduce((a, b) => a + b, 0) / v.length),
           borderColor: CHART_COLORS[2],
           backgroundColor: CHART_COLORS[2] + '40',
@@ -298,8 +252,8 @@ function buildIframeLineChart(): void {
       maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: {
-        x: { title: { display: true, text: chartTexts.value.iframeCount } },
-        y: { title: { display: true, text: chartTexts.value.seekFps } },
+        x: { title: { display: true, text: chartTexts.iframeCount } },
+        y: { title: { display: true, text: chartTexts.seekFps } },
       },
     },
   })
@@ -331,8 +285,8 @@ function buildAudioBarChart(): void {
     data: {
       labels: pairs.map((p) => p.label),
       datasets: [
-        { label: chartTexts.value.withAudio, data: pairs.map((p) => p.withAudio), backgroundColor: CHART_COLORS[3] },
-        { label: chartTexts.value.noAudio, data: pairs.map((p) => p.withoutAudio), backgroundColor: CHART_COLORS[4] },
+        { label: chartTexts.withAudio, data: pairs.map((p) => p.withAudio), backgroundColor: CHART_COLORS[3] },
+        { label: chartTexts.noAudio, data: pairs.map((p) => p.withoutAudio), backgroundColor: CHART_COLORS[4] },
       ],
     },
     options: {
@@ -340,7 +294,7 @@ function buildAudioBarChart(): void {
       maintainAspectRatio: false,
       plugins: { legend: { position: 'top' } },
       scales: {
-        y: { title: { display: true, text: chartTexts.value.seekTime } },
+        y: { title: { display: true, text: chartTexts.seekTime } },
       },
     },
   })
@@ -369,11 +323,11 @@ function buildBoxPlotChart(): void {
     data: {
       labels,
       datasets: [
-        { label: chartTexts.value.min, data: minData, backgroundColor: CHART_COLORS[1] + 'aa' },
-        { label: chartTexts.value.p25, data: p25Data, backgroundColor: CHART_COLORS[0] + 'aa' },
-        { label: chartTexts.value.median, data: medianData, backgroundColor: CHART_COLORS[2] + 'aa' },
-        { label: chartTexts.value.p75, data: p75Data, backgroundColor: CHART_COLORS[3] + 'aa' },
-        { label: chartTexts.value.max, data: maxData, backgroundColor: CHART_COLORS[5] + 'aa' },
+        { label: chartTexts.min, data: minData, backgroundColor: CHART_COLORS[1] + 'aa' },
+        { label: chartTexts.p25, data: p25Data, backgroundColor: CHART_COLORS[0] + 'aa' },
+        { label: chartTexts.median, data: medianData, backgroundColor: CHART_COLORS[2] + 'aa' },
+        { label: chartTexts.p75, data: p75Data, backgroundColor: CHART_COLORS[3] + 'aa' },
+        { label: chartTexts.max, data: maxData, backgroundColor: CHART_COLORS[5] + 'aa' },
       ],
     },
     options: {
@@ -381,7 +335,7 @@ function buildBoxPlotChart(): void {
       maintainAspectRatio: false,
       plugins: { legend: { position: 'top' } },
       scales: {
-        y: { title: { display: true, text: chartTexts.value.seekTime } },
+        y: { title: { display: true, text: chartTexts.seekTime } },
       },
     },
   })
@@ -470,7 +424,7 @@ onUnmounted(() => {
               >
                 {{ col.label }}
                 <span v-if="sortKey === col.key" class="ml-1 text-xs">
-                  {{ sortAsc ? '↑' : '↓' }}
+                  {{ sortAsc ? 'asc' : 'desc' }}
                 </span>
               </TableHead>
             </TableRow>
