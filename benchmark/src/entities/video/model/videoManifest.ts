@@ -1,7 +1,6 @@
 import type { VideoMeta } from './types'
 
-const BASE_URL =
-  'https://media.githubusercontent.com/media/stepancar/articles/main/articles/html-video-element-seeking/mediaSource/test-videos/'
+const BASE_URL = `${import.meta.env.BASE_URL}videos/`
 
 export const VIDEO_MANIFEST: VideoMeta[] = [
   {

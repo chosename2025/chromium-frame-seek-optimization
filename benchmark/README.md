@@ -4,6 +4,8 @@ Vue 3 + TypeScript benchmark suite for measuring frame-by-frame video seek perfo
 
 Inspired by [HTML Video Element Seeking Performance](https://stepancar.github.io/articles/articles/html-video-element-seeking/).
 
+Live app: https://chosename2025.github.io/chromium-frame-seek-optimization/
+
 ## Features
 
 - Frame-by-frame seek performance measurement

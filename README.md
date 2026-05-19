@@ -19,6 +19,7 @@ The expensive case is frame-by-frame navigation: applications repeatedly assign 
 | [`chromiuminfo/implementation.md`](./chromiuminfo/implementation.md) | Implementation notes and changed Chromium components. |
 | [`chromiuminfo/patch-4-validation.md`](./chromiuminfo/patch-4-validation.md) | Unit tests and validation commands. |
 | [`benchmark/`](./benchmark/) | Vue + TypeScript benchmark app. |
+| [`benchmark-results/`](./benchmark-results/) | Compact benchmark summary and charts. |
 
 ## Patch Summary
 
@@ -50,6 +51,8 @@ Focused run:
 
 ## Benchmark
 
+Live benchmark: https://chosename2025.github.io/chromium-frame-seek-optimization/
+
 Local run:
 
 ```bash
@@ -59,3 +62,13 @@ npm run dev
 ```
 
 GitHub Pages deployment is configured in [`.github/workflows/deploy-benchmark.yml`](./.github/workflows/deploy-benchmark.yml). In repository settings, set Pages source to **GitHub Actions**.
+
+## Benchmark Results
+
+Captured benchmark data is summarized in [`benchmark-results/summary.csv`](./benchmark-results/summary.csv). The browser comparison chart includes patched Chromium, Chrome, Brave, and Firefox.
+
+Key result: patched Chromium 146 reduced median frame-step seek time from **6.8 ms** to **0.3 ms** on the captured benchmark set, a **22.7x median-speedup**. Global average seek throughput increased from **50 FPS** to **2734 FPS**.
+
+![Patched vs unpatched Chromium frame-step seeking](./benchmark-results/patch-speedup.png)
+
+![Browser benchmark comparison](./benchmark-results/browser-comparison.png)

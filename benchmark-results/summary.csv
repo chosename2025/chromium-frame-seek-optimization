@@ -1,0 +1,6 @@
+browser_label,source_file,measurements,mean_seek_ms,median_seek_ms,p95_seek_ms,p99_seek_ms,seek_fps,stalls,interrupted
+Patched Chromium 146,benchmark-patched.csv,7204,0.37,0.3,1.0,1.7,2734.28,0,0
+Unpatched Chromium 146,benchmark-unpatched.csv,7204,19.85,6.8,69.0,86.79,50.37,0,1800
+Chrome 144,chrome.csv,3602,27.11,8.5,93.99,149.29,36.88,0,0
+Brave 148,brave.csv,7204,39.41,12.4,140.87,182.59,25.37,0,0
+Firefox 149,firefox.csv,3602,199.11,48.0,892.9,1276.93,5.02,508,0
